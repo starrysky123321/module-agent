@@ -57,6 +57,7 @@ docker compose --profile gpu up -d code-gpu-worker
 - [系统架构](ARCHITECTURE.md)
 - [Agent 开发路线图](AGENT_ROADMAP.md)
 - [生产就绪说明](M8_PRODUCTION_READINESS.md)
+- [GitHub 开发流程](GIT_WORKFLOW.md)
 
 ## 安全边界
 
