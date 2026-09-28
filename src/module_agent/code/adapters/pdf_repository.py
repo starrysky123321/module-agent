@@ -54,6 +54,12 @@ class PdfRepositorySearcher:
         limit: int = 10,
     ) -> list[dict[str, Any]]:
         """搜索代码仓库。"""
+
+        if not 1 <= limit <= 100:
+            raise ValueError(
+                "PDF repository search limit must be between 1 and 100"
+            )
+
         url = paper.pdf_url
         if url is None:
             return []
