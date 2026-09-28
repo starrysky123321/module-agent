@@ -15,6 +15,9 @@ from module_agent.api.request_context import (
 )
 from module_agent.api.auth import register_api_auth_middleware
 from module_agent.api.metrics import metrics_router
+from module_agent.api.audit import register_audit_middleware
+from module_agent.api.rate_limit import register_api_rate_limit_middleware
+from module_agent.shared.cache.redis import redis_client
 
 
 def create_app() -> FastAPI:
@@ -24,6 +27,12 @@ def create_app() -> FastAPI:
         title=app_settings.app_name,
     )
     register_api_auth_middleware(application, app_settings)
+    register_api_rate_limit_middleware(
+        application,
+        app_settings,
+        redis_client,
+    )
+    register_audit_middleware(application)
     register_request_context_middleware(application)
     register_exception_handlers(application)
     application.include_router(metrics_router)
