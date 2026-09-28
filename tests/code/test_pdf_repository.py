@@ -2,6 +2,7 @@ import asyncio
 
 import httpx
 import pytest
+
 from module_agent.code.adapters.pdf_repository import (
     PdfRepositorySearcher,
     download,
@@ -146,7 +147,6 @@ def test_extract_github_links_normalizes_wrapped_and_git_urls() -> None:
     assert parse_github_repo_url(
         "https://github.com/alice/segment-anything.git?download=1"
     ) == ("alice", "segment-anything")
-
 
 
 @pytest.mark.parametrize("limit", [0, -1, 101])
