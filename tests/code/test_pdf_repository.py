@@ -2,8 +2,8 @@ import asyncio
 
 import httpx
 import pytest
-
 from module_agent.code.adapters.pdf_repository import (
+    PdfRepositorySearcher,
     download,
     extract_github_links,
     parse_github_repo_url,
@@ -13,6 +13,7 @@ from module_agent.code.domain.errors import (
     PdfTooLargeError,
     UnsafePdfUrlError,
 )
+from module_agent.code.domain.request import CodePaperInput
 
 
 PUBLIC_PDF_URL = "https://93.184.216.34/paper.pdf"
@@ -145,3 +146,26 @@ def test_extract_github_links_normalizes_wrapped_and_git_urls() -> None:
     assert parse_github_repo_url(
         "https://github.com/alice/segment-anything.git?download=1"
     ) == ("alice", "segment-anything")
+
+
+
+@pytest.mark.parametrize("limit", [0, -1, 101])
+def test_pdf_repository_search_rejects_invalid_limit(limit: int) -> None:
+    async def run() -> None:
+        paper = CodePaperInput(
+            paper_id=1,
+            source="openalex",
+            source_id="W1",
+            title="Example paper",
+        )
+
+        async with httpx.AsyncClient() as client:
+            searcher = PdfRepositorySearcher(client)
+
+            with pytest.raises(ValueError, match="between 1 and 100"):
+                await searcher.search_github_links(
+                    paper,
+                    limit=limit,
+                )
+
+    asyncio.run(run())
