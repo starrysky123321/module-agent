@@ -1,5 +1,6 @@
 import asyncio
-from functools import partial
+
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from module_agent.shared.checkpoint.postgres import (
     postgres_checkpointer_manager,
@@ -17,8 +18,8 @@ from module_agent.literature.adapters.messaging.completion_consumer import (
 from module_agent.bootstrap.worker_factories import (
     build_module_workflow_coordinator,
 )
-from module_agent.literature.workers.completion import (
-    LiteratureCompletionWorker,
+from module_agent.literature.domain.events import (
+    LiteratureCompletedEvent,
 )
 
 from module_agent.code.adapters.github_client import github_client_manager
@@ -30,22 +31,27 @@ from module_agent.shared.decision.typesafe_client import (
 
 async def run_worker() -> None:
     """执行当前任务。"""
-    checkpointer = await postgres_checkpointer_manager.start()
+    await postgres_checkpointer_manager.start()
     consumer = RabbitMQLiteratureCompletionConsumer(
         rabbitmq_connection_manager
     )
-    coordinator_factory = partial(
-        build_module_workflow_coordinator,
-        checkpointer=checkpointer,
-    )
-    worker = LiteratureCompletionWorker(
-        consumer=consumer,
-        session_factory=async_session_factory,
-        coordinator_factory=coordinator_factory,
-    )
+
+    async def handle(event: LiteratureCompletedEvent) -> None:
+        async def resume(checkpointer: AsyncPostgresSaver) -> None:
+            async with async_session_factory() as session:
+                async with session.begin():
+                    coordinator = build_module_workflow_coordinator(
+                        session,
+                        checkpointer,
+                    )
+                    await coordinator.resume_after_literature_completion(
+                        event.run_id
+                    )
+
+        await postgres_checkpointer_manager.run_with_recovery(resume)
 
     try:
-        await worker.run()
+        await consumer.run(handle)
     finally:
         await postgres_checkpointer_manager.close()
         await rabbitmq_connection_manager.close()

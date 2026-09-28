@@ -96,6 +96,19 @@ class AppSettings(BaseSettings):
     # LangGraph checkpoint 数据库地址。
     langgraph_database_url: str = ""
     langgraph_database_url_file: Path | None = None
+
+    # Completion 死信最多自动重放的次数。
+    completion_dead_letter_replay_limit: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+    )
+    # Completion 死信再次进入主队列前的等待毫秒数。
+    completion_dead_letter_retry_delay_ms: int = Field(
+        default=30_000,
+        ge=1_000,
+        le=3_600_000,
+    )
     
     # 文献检索词规划器的实现模式。
     literature_query_planner: Literal["rule", "qwen"] = "rule"

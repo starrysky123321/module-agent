@@ -112,6 +112,34 @@ def test_literature_sources_reject_unknown_or_duplicate_names() -> None:
         )
 
 
+def test_completion_recovery_settings_parse_environment_values() -> None:
+    settings = AppSettings(
+        _env_file=None,
+        completion_dead_letter_replay_limit="5",
+        completion_dead_letter_retry_delay_ms="45000",
+    )
+
+    assert settings.completion_dead_letter_replay_limit == 5
+    assert settings.completion_dead_letter_retry_delay_ms == 45_000
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("completion_dead_letter_replay_limit", 0),
+        ("completion_dead_letter_replay_limit", 21),
+        ("completion_dead_letter_retry_delay_ms", 999),
+        ("completion_dead_letter_retry_delay_ms", 3_600_001),
+    ],
+)
+def test_completion_recovery_settings_reject_unsafe_boundaries(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, **{field: value})
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

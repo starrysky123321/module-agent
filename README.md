@@ -106,6 +106,20 @@ uv run python -m module_agent.cli.run_release_acceptance \
 scripts/service_recovery_drill.sh api --confirm
 ```
 
+Compose 启动时，`workspace-init` 会把持久化 Code Workspace volume 修正为应用
+用户 `10001:10001` 可写。Completion worker 在 PostgreSQL 连接中断后会重建
+LangGraph checkpointer 并重试当前事件，无需人工重启 worker。
+
+Literature/Code completion 死信由 `completion-recovery-worker` 延迟重放；默认每
+30 秒重放一次，最多 3 次。超过上限或内容无效的消息不会丢弃，而是保留在
+`literature.completed.parked.v1` 或 `code.completed.parked.v1`。可通过以下变量
+调整边界：
+
+```dotenv
+COMPLETION_DEAD_LETTER_REPLAY_LIMIT=3
+COMPLETION_DEAD_LETTER_RETRY_DELAY_MS=30000
+```
+
 数据库备份和恢复演练：
 
 ```bash

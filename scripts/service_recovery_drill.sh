@@ -17,7 +17,7 @@ if [[ "$confirmation" != "--confirm" ]]; then
   exit 2
 fi
 case "$service" in
-  api|literature-worker|literature-completion-worker|code-worker|code-completion-worker)
+  api|literature-worker|literature-completion-worker|code-worker|code-completion-worker|completion-recovery-worker)
     ;;
   *)
     echo "Unsupported recovery drill service: $service" >&2

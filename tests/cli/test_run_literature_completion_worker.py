@@ -20,9 +20,7 @@ def test_completion_worker_closes_all_process_resources(
     close_qwen = AsyncMock()
     dispose_database = AsyncMock()
     run = AsyncMock(side_effect=worker_error)
-    worker = MagicMock(run=run)
-    worker_class = MagicMock(return_value=worker)
-    consumer = object()
+    consumer = MagicMock(run=run)
     consumer_class = MagicMock(return_value=consumer)
 
     monkeypatch.setattr(
@@ -55,7 +53,6 @@ def test_completion_worker_closes_all_process_resources(
         "database_engine",
         SimpleNamespace(dispose=dispose_database),
     )
-    monkeypatch.setattr(worker_cli, "LiteratureCompletionWorker", worker_class)
     monkeypatch.setattr(
         worker_cli,
         "RabbitMQLiteratureCompletionConsumer",
@@ -72,9 +69,8 @@ def test_completion_worker_closes_all_process_resources(
     consumer_class.assert_called_once_with(
         worker_cli.rabbitmq_connection_manager
     )
-    worker_class.assert_called_once()
-    assert worker_class.call_args.kwargs["consumer"] is consumer
-    run.assert_awaited_once_with()
+    run.assert_awaited_once()
+    assert callable(run.await_args.args[0])
     close_checkpointer.assert_awaited_once_with()
     close_rabbitmq.assert_awaited_once_with()
     close_github.assert_awaited_once_with()

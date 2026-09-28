@@ -70,6 +70,31 @@ services:
         retries: 12
         start_period: 15s
 
+  workspace-init:
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-workspace-init
+    user: "0:0"
+    restart: "no"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    command:
+      - sh
+      - -ec
+      - >-
+        mkdir -p /var/lib/module-agent/code-workspaces &&
+        chown -R 10001:10001 /var/lib/module-agent/code-workspaces &&
+        chmod 0750 /var/lib/module-agent/code-workspaces
+    volumes:
+      - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
+
   literature-worker:
     <<: *app-security
     build: .
@@ -118,6 +143,8 @@ services:
     volumes:
       - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
     depends_on:
+      workspace-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
       postgres:
@@ -151,6 +178,8 @@ services:
               count: 1
               capabilities: [gpu]
     depends_on:
+      workspace-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
       postgres:
@@ -176,6 +205,8 @@ services:
     volumes:
       - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
     depends_on:
+      workspace-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
       postgres:
@@ -277,6 +308,8 @@ services:
     volumes:
       - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
     depends_on:
+      workspace-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
       postgres:
@@ -326,6 +359,8 @@ services:
       retries: 10
       start_period: 10s
     depends_on:
+      workspace-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
       postgres:
@@ -336,6 +371,29 @@ services:
         condition: service_healthy
       langgraph-migrate:
         condition: service_completed_successfully
+
+  completion-recovery-worker:
+    <<: *app-security
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-completion-recovery-worker
+    restart: unless-stopped
+    command:
+      - uv
+      - run
+      - --no-sync
+      - python
+      - -m
+      - module_agent.cli.run_completion_recovery_worker
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-module_agent}:${RABBITMQ_PASSWORD:-module_agent_dev}@rabbitmq:5672/${RABBITMQ_VHOST:-module_agent}
+      COMPLETION_DEAD_LETTER_REPLAY_LIMIT: ${COMPLETION_DEAD_LETTER_REPLAY_LIMIT:-3}
+      COMPLETION_DEAD_LETTER_RETRY_DELAY_MS: ${COMPLETION_DEAD_LETTER_RETRY_DELAY_MS:-30000}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
   migrate:
     <<: *app-security
@@ -453,6 +511,9 @@ services:
       CODE_WORKSPACE_ROOT: /var/lib/module-agent/code-workspaces
     volumes:
       - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
+    depends_on:
+      workspace-init:
+        condition: service_completed_successfully
 
 
 
