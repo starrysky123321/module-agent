@@ -1,6 +1,7 @@
 import asyncio
 
 import httpx
+import pytest
 
 import module_agent.code.adapters.paper_links as paper_links
 from module_agent.code.adapters.paper_links import PaperLinkRepositorySearcher
@@ -48,3 +49,25 @@ def test_paper_link_searcher_reads_landing_and_direct_supplementary_links(
         "bob/supplement",
     ]
     assert result[0][1] == "https://papers.test/project"
+
+
+@pytest.mark.parametrize("limit", [0, -1, 101])
+def test_paper_link_searcher_rejects_invalid_limit(limit: int) -> None:
+    async def run() -> None:
+        paper = CodePaperInput(
+            paper_id=1,
+            source="openalex",
+            source_id="W1",
+            title="Example paper",
+        )
+
+        async with httpx.AsyncClient() as client:
+            searcher = PaperLinkRepositorySearcher(client)
+
+            with pytest.raises(ValueError, match="between 1 and 100"):
+                await searcher.search_github_links(
+                    paper,
+                    limit=limit,
+                )
+
+    asyncio.run(run())
