@@ -16,3 +16,13 @@ htmlcov/
 # Local runtime artifacts
 workspaces/
 .trash/
+
+# Local planning and learning notes
+/AGENT_ROADMAP.md
+/ARCHITECTURE.md
+/CODE_AGENT_PLAN.md
+/GIT_WORKFLOW.md
+/M8_PRODUCTION_READINESS.md
+/PROJECT_QUICKSTART.md
+/SUPERVISOR_AGENT_PLAN.md
+/VALIDATION_AGENT_PLAN.md

@@ -51,14 +51,6 @@ GPU Worker 需要 NVIDIA Container Toolkit，并通过 profile 单独启动：
 docker compose --profile gpu up -d code-gpu-worker
 ```
 
-## 文档
-
-- [项目快速上手](PROJECT_QUICKSTART.md)
-- [系统架构](ARCHITECTURE.md)
-- [Agent 开发路线图](AGENT_ROADMAP.md)
-- [生产就绪说明](M8_PRODUCTION_READINESS.md)
-- [GitHub 开发流程](GIT_WORKFLOW.md)
-
 ## 安全边界
 
 仓库发现阶段不会安装依赖或执行第三方代码。依赖安装与项目测试必须由调用方
