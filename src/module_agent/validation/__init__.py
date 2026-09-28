@@ -1,0 +1,1 @@
+"""Artifact validation business module."""

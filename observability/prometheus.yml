@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: module-agent-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+
+  - job_name: module-agent-workers
+    static_configs:
+      - targets:
+          - "literature-worker:9100"
+          - "code-worker:9101"
+          - "code-completion-worker:9102"
+
+  - job_name: rabbitmq
+    static_configs:
+      - targets: ["rabbitmq:15692"]

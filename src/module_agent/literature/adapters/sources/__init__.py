@@ -1,0 +1,1 @@
+"""Academic literature source adapters."""

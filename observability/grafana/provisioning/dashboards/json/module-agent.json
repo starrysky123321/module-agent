@@ -1,0 +1,37 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "HTTP request rate",
+      "targets": [{"expr": "sum by (route, status) (rate(module_agent_http_requests_total[5m]))", "refId": "A"}],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "LLM tokens / second",
+      "targets": [{"expr": "sum by (stage, token_type) (rate(module_agent_llm_tokens_total[5m]))", "refId": "A"}],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "RabbitMQ ready messages",
+      "targets": [{"expr": "sum by (queue) (rabbitmq_queue_messages_ready)", "refId": "A"}],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Worker job outcomes",
+      "targets": [{"expr": "sum by (queue, outcome) (rate(module_agent_queue_jobs_total[5m]))", "refId": "A"}],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+    }
+  ],
+  "schemaVersion": 41,
+  "tags": ["module-agent"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "title": "Module Agent Overview",
+  "uid": "module-agent-overview",
+  "version": 1
+}

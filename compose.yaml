@@ -1,0 +1,408 @@
+x-app-security: &app-security
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m,mode=1777
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: module-agent-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-module_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-module_agent_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-module_agent}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - module_agent_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:8-alpine
+    container_name: module-agent-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - module_agent_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  
+  rabbitmq:
+      image: rabbitmq:4.3-management-alpine
+      container_name: module-agent-rabbitmq
+      restart: unless-stopped
+      environment:
+        RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-module_agent}
+        RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-module_agent_dev}
+        RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-module_agent}
+      ports:
+        - "${RABBITMQ_AMQP_PORT:-5672}:5672"
+        - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+        - "${RABBITMQ_PROMETHEUS_PORT:-15692}:15692"
+      command:
+        - sh
+        - -ec
+        - rabbitmq-plugins enable --offline rabbitmq_prometheus && rabbitmq-server
+      volumes:
+        - module_agent_rabbitmq_data:/var/lib/rabbitmq
+      healthcheck:
+        test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+        interval: 5s
+        timeout: 5s
+        retries: 12
+        start_period: 15s
+
+  literature-worker:
+    <<: *app-security
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-literature-worker
+    restart: unless-stopped
+    command:
+      - uv
+      - run
+      - --no-sync
+      - python
+      - -m
+      - module_agent.cli.run_literature_worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-module_agent}:${RABBITMQ_PASSWORD:-module_agent_dev}@rabbitmq:5672/${RABBITMQ_VHOST:-module_agent}
+      METRICS_PORT: "9100"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  code-worker:
+    <<: *app-security
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-code-worker
+    restart: unless-stopped
+    command: ["uv", "run", "--no-sync", "python", "-m", "module_agent.cli.run_code_worker"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-module_agent}:${RABBITMQ_PASSWORD:-module_agent_dev}@rabbitmq:5672/${RABBITMQ_VHOST:-module_agent}
+      CODE_WORKSPACE_ROOT: /var/lib/module-agent/code-workspaces
+      CODE_WORKER_COMPUTE_TARGET: cpu
+      CODE_WORKER_PREFETCH: "1"
+      METRICS_PORT: "9101"
+    volumes:
+      - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  code-gpu-worker:
+    <<: *app-security
+    profiles: ["gpu"]
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-code-gpu-worker
+    restart: unless-stopped
+    command: ["uv", "run", "--no-sync", "python", "-m", "module_agent.cli.run_code_worker"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-module_agent}:${RABBITMQ_PASSWORD:-module_agent_dev}@rabbitmq:5672/${RABBITMQ_VHOST:-module_agent}
+      CODE_WORKSPACE_ROOT: /var/lib/module-agent/code-workspaces
+      CODE_WORKER_COMPUTE_TARGET: gpu
+      CODE_WORKER_PREFETCH: "1"
+      METRICS_PORT: "9103"
+    volumes:
+      - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  code-completion-worker:
+    <<: *app-security
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-code-completion-worker
+    restart: unless-stopped
+    command: ["uv", "run", "--no-sync", "python", "-m", "module_agent.cli.run_code_completion_worker"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-module_agent}:${RABBITMQ_PASSWORD:-module_agent_dev}@rabbitmq:5672/${RABBITMQ_VHOST:-module_agent}
+      LANGGRAPH_DATABASE_URL: postgresql://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      LANGGRAPH_STRICT_MSGPACK: "true"
+      CODE_WORKSPACE_ROOT: /var/lib/module-agent/code-workspaces
+      METRICS_PORT: "9102"
+    volumes:
+      - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      langgraph-migrate:
+        condition: service_completed_successfully
+
+  literature-dead-worker:
+    <<: *app-security
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-literature-dead-worker
+    restart: unless-stopped
+    command:
+      - uv
+      - run
+      - --no-sync
+      - python
+      - -m
+      - module_agent.cli.run_literature_dead_worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-module_agent}:${RABBITMQ_PASSWORD:-module_agent_dev}@rabbitmq:5672/${RABBITMQ_VHOST:-module_agent}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  literature-completion-worker:
+    <<: *app-security
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-literature-completion-worker
+    restart: unless-stopped
+    command:
+      - uv
+      - run
+      - --no-sync
+      - python
+      - -m
+      - module_agent.cli.run_literature_completion_worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-module_agent}:${RABBITMQ_PASSWORD:-module_agent_dev}@rabbitmq:5672/${RABBITMQ_VHOST:-module_agent}
+      LANGGRAPH_DATABASE_URL: postgresql://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      LANGGRAPH_STRICT_MSGPACK: "true"
+      CODE_WORKSPACE_ROOT: /var/lib/module-agent/code-workspaces
+    volumes:
+      - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      langgraph-migrate:
+        condition: service_completed_successfully
+
+  api:
+    <<: *app-security
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-api
+    restart: unless-stopped
+    command:
+      - uv
+      - run
+      - --no-sync
+      - uvicorn
+      - module_agent.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-module_agent}:${RABBITMQ_PASSWORD:-module_agent_dev}@rabbitmq:5672/${RABBITMQ_VHOST:-module_agent}
+      LANGGRAPH_DATABASE_URL: postgresql://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      LANGGRAPH_STRICT_MSGPACK: "true"
+      CODE_WORKSPACE_ROOT: /var/lib/module-agent/code-workspaces
+    volumes:
+      - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/', timeout=2)
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      langgraph-migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    <<: *app-security
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-migrate
+    restart: "no"
+    command:
+      - uv
+      - run
+      - --no-sync
+      - alembic
+      - upgrade
+      - head
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-module_agent}:${RABBITMQ_PASSWORD:-module_agent_dev}@rabbitmq:5672/${RABBITMQ_VHOST:-module_agent}
+    depends_on:
+      postgres:
+        condition: service_healthy
+  langgraph-migrate:
+    <<: *app-security
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-langgraph-migrate
+    restart: "no"
+    command:
+      - uv
+      - run
+      - --no-sync
+      - python
+      - -m
+      - module_agent.cli.setup_langgraph_checkpointer
+    env_file:
+      - .env
+    environment:
+      LANGGRAPH_DATABASE_URL: postgresql://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      LANGGRAPH_STRICT_MSGPACK: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    container_name: module-agent-prometheus
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - module_agent_prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      api:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:12.2.1
+    container_name: module-agent-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-module_agent_dev}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - module_agent_grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+
+  workspace-cleaner:
+    <<: *app-security
+    profiles: ["maintenance"]
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-workspace-cleaner
+    restart: "no"
+    command:
+      - uv
+      - run
+      - --no-sync
+      - python
+      - -m
+      - module_agent.cli.cleanup_code_workspaces
+      - --execute
+      - --retention-days
+      - ${CODE_WORKSPACE_RETENTION_DAYS:-14}
+      - --trash-retention-days
+      - ${CODE_WORKSPACE_TRASH_RETENTION_DAYS:-7}
+    env_file: [.env]
+    environment:
+      CODE_WORKSPACE_ROOT: /var/lib/module-agent/code-workspaces
+    volumes:
+      - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
+
+
+
+volumes:
+  module_agent_postgres_data:
+  module_agent_redis_data:
+  module_agent_rabbitmq_data:
+  module_agent_code_workspaces:
+  module_agent_prometheus_data:
+  module_agent_grafana_data:

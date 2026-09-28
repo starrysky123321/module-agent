@@ -1,0 +1,36 @@
+[project]
+name = "module-agent"
+version = "0.1.0"
+description = "Academic module search agent"
+requires-python = ">=3.12"
+dependencies = [
+    "aio-pika>=10.0.1",
+    "alembic>=1.19.1",
+    "asyncpg>=0.31.0",
+    "beautifulsoup4>=4.15.0",
+    "curl-cffi>=0.16.2",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "langgraph>=1.2.11",
+    "langgraph-checkpoint-postgres>=3.1.2",
+    "loguru>=0.7.3",
+    "openai>=3.7.0",
+    "pdfplumber>=0.11.10",
+    "prometheus-client>=0.26.0",
+    "psycopg[binary,pool]>=3.3.5",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+    "pypdf>=6.19.0",
+    "redis>=8.1.0",
+    "sqlalchemy>=2.0.52",
+    "typesafe-sdk>=0.7.1",
+    "uvicorn>=0.52.4",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

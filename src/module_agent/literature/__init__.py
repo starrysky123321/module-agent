@@ -1,0 +1,1 @@
+"""Literature discovery business module."""

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: module_agent
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: module_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U module_agent -d module_agent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+      rabbitmq:
+        image: rabbitmq:4.3-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: module_agent
+          RABBITMQ_DEFAULT_PASS: ci_password
+          RABBITMQ_DEFAULT_VHOST: module_agent
+        ports:
+          - 5672:5672
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://module_agent:ci_password@localhost:5432/module_agent
+      LANGGRAPH_DATABASE_URL: postgresql://module_agent:ci_password@localhost:5432/module_agent
+      REDIS_URL: redis://localhost:6379/0
+      RABBITMQ_URL: amqp://module_agent:ci_password@localhost:5672/module_agent
+      LITERATURE_QUERY_PLANNER: rule
+      LITERATURE_RELEVANCE_SCORER: rule
+      LITERATURE_METHOD_EXTRACTOR: off
+      SUPERVISOR_POLICY: rule
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run alembic upgrade head
+      - run: uv run python -m module_agent.cli.setup_langgraph_checkpointer
+      - run: uv run pytest -q
+      - run: docker build -t module-agent:ci .
