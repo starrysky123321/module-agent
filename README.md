@@ -87,6 +87,19 @@ uv run python -m module_agent.cli.run_api_load_test \
 ```
 
 报告包含吞吐、错误率、p95 和最大耗时；超过阈值时命令返回非零退出码。
+发布前可以通过公开 API 跑一次静态验证的完整 Agent 流程：
+
+```bash
+uv run python -m module_agent.cli.run_release_acceptance \
+  --topic "graph attention networks for node classification" \
+  --keyword "graph attention network" \
+  --max-results 3 \
+  --paper-count 1
+```
+
+该命令会自动选择排名靠前的论文，但不会启用依赖安装或项目实验。默认总超时
+为 1800 秒，输出包含每个阶段的耗时、Run ID、最终结果或明确的失败阶段。
+
 如需验证容器进程被强制终止后的恢复能力，明确确认后执行：
 
 ```bash
