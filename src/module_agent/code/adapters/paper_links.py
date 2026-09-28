@@ -34,6 +34,11 @@ class PaperLinkRepositorySearcher:
         limit: int = 10,
     ) -> list[tuple[dict[str, Any], str]]:
         """返回仓库元数据及提供该链接的论文页面。"""
+        if not 1 <= limit <= 100:
+            raise ValueError(
+                "Paper link search limit must be between 1 and 100"
+            )
+
         source_urls = list(
             dict.fromkeys(
                 url
