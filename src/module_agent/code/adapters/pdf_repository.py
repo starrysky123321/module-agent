@@ -246,19 +246,28 @@ async def _validate_public_http_url(url: str) -> None:
             f"Could not resolve PDF hostname: {parsed.hostname}"
         )
 
-    for address in addresses:
-        host = address[4][0].split("%", 1)[0]
+    for _, _, _, _, sockaddr in addresses:
+        host = sockaddr[0]
+
+        if not isinstance(host, str):
+            raise PdfDownloadError(
+                f"Unexpected resolved PDF address: {sockaddr}"
+            )
+
+        host = host.split("%", 1)[0]
+
         try:
             ip = ipaddress.ip_address(host)
         except ValueError as exc:
             raise PdfDownloadError(
                 f"Could not validate resolved PDF address: {host}"
             ) from exc
+
         if not ip.is_global:
             raise UnsafePdfUrlError(
                 f"PDF URL resolves to a non-public address: {ip}"
             )
-            
+                
         
 
 def extract(pdf_bytes: bytes) -> list[str]:
