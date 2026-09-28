@@ -51,7 +51,7 @@ class RabbitMQLiteratureJobQueue:
             )
 
             # 5. 创建消息
-            payload = {
+            payload: dict[str, int | bool | str] = {
                 "run_id": run_id,
                 "resume_workflow": resume_workflow,
             }

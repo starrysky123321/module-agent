@@ -111,9 +111,6 @@ def test_search_semantic_scholar_builds_request_and_filters_dates() -> None:
     }
     client = AsyncMock()
     client.get.return_value = response
-    client_context = MagicMock()
-    client_context.__aenter__ = AsyncMock(return_value=client)
-    client_context.__aexit__ = AsyncMock(return_value=None)
     request = SearchRequest(
         topic="graph neural networks",
         description="Test Semantic Scholar search",
@@ -125,9 +122,10 @@ def test_search_semantic_scholar_builds_request_and_filters_dates() -> None:
 
     with (
         patch(
-            "module_agent.literature.adapters.sources.semantic_scholar.httpx.AsyncClient",
-            return_value=client_context,
-        ) as client_class,
+            "module_agent.literature.adapters.sources.semantic_scholar."
+            "literature_http_client_manager.get_client",
+            return_value=client,
+        ) as client_factory,
         patch(
             "module_agent.literature.adapters.sources.semantic_scholar."
             "app_settings.semantic_scholar_api_key",
@@ -146,7 +144,7 @@ def test_search_semantic_scholar_builds_request_and_filters_dates() -> None:
         "year-in-range",
     ]
     rate_limiter_wait.assert_awaited_once_with()
-    client_class.assert_called_once_with(timeout=30.0)
+    client_factory.assert_called_once_with()
     client.get.assert_awaited_once_with(
         SEMANTIC_SCHOLAR_URL,
         params={
@@ -170,9 +168,6 @@ def test_search_semantic_scholar_retries_temporary_failure() -> None:
     )
     client = AsyncMock()
     client.get.side_effect = [first_response, successful_response]
-    client_context = MagicMock()
-    client_context.__aenter__ = AsyncMock(return_value=client)
-    client_context.__aexit__ = AsyncMock(return_value=None)
     rate_limiter_wait = AsyncMock()
     sleep = AsyncMock()
     request = SearchRequest(
@@ -186,8 +181,9 @@ def test_search_semantic_scholar_retries_temporary_failure() -> None:
 
     with (
         patch(
-            "module_agent.literature.adapters.sources.semantic_scholar.httpx.AsyncClient",
-            return_value=client_context,
+            "module_agent.literature.adapters.sources.semantic_scholar."
+            "literature_http_client_manager.get_client",
+            return_value=client,
         ),
         patch(
             "module_agent.literature.adapters.sources.semantic_scholar."
@@ -212,9 +208,6 @@ def test_search_semantic_scholar_records_exhausted_temporary_failure() -> None:
     failed_response = httpx.Response(429, request=http_request)
     client = AsyncMock()
     client.get.return_value = failed_response
-    client_context = MagicMock()
-    client_context.__aenter__ = AsyncMock(return_value=client)
-    client_context.__aexit__ = AsyncMock(return_value=None)
     circuit_breaker = MagicMock()
     circuit_breaker.before_call = AsyncMock()
     circuit_breaker.record_failure = AsyncMock()
@@ -230,8 +223,9 @@ def test_search_semantic_scholar_records_exhausted_temporary_failure() -> None:
 
     with (
         patch(
-            "module_agent.literature.adapters.sources.semantic_scholar.httpx.AsyncClient",
-            return_value=client_context,
+            "module_agent.literature.adapters.sources.semantic_scholar."
+            "literature_http_client_manager.get_client",
+            return_value=client,
         ),
         patch(
             "module_agent.literature.adapters.sources.semantic_scholar."
@@ -276,7 +270,8 @@ def test_search_semantic_scholar_translates_open_circuit_to_skipped() -> None:
             circuit_breaker,
         ),
         patch(
-            "module_agent.literature.adapters.sources.semantic_scholar.httpx.AsyncClient"
+            "module_agent.literature.adapters.sources.semantic_scholar."
+            "literature_http_client_manager.get_client"
         ) as async_client,
     ):
         with pytest.raises(

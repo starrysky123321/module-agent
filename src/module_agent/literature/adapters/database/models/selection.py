@@ -1,11 +1,9 @@
 from module_agent.shared.database.base import Base
-from sqlalchemy import BigInteger, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Date, Boolean
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import BigInteger, ForeignKey, Text
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime
-from module_agent.shared.database.base import Base
-from sqlalchemy.sql import text
-from sqlalchemy import ForeignKey, DateTime
+from sqlalchemy import DateTime
 from sqlalchemy.sql import func
 
 

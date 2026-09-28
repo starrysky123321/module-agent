@@ -70,6 +70,16 @@ def test_jev_guarded_is_a_supported_policy_mode() -> None:
     assert settings.supervisor_policy == "jev_guarded"
 
 
+def test_literature_sources_reject_unknown_or_duplicate_names() -> None:
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, literature_sources=["unknown"])
+    with pytest.raises(ValidationError):
+        AppSettings(
+            _env_file=None,
+            literature_sources=["openalex", "openalex"],
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

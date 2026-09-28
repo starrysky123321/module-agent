@@ -12,7 +12,7 @@ Supervisor Agent，并在论文选择阶段保留人工确认入口。
 - 无可信仓库时生成明确标记的候选复现实现。
 - 在默认静态、显式沙箱的安全策略下验证代码产物。
 - 通过 PostgreSQL、Redis、RabbitMQ 和 LangGraph checkpoint 支持异步执行、
-  暂停、恢复、重试与追踪。
+  暂停、恢复、重试、死信恢复与追踪。
 - 提供 Prometheus 指标和 Grafana dashboard。
 
 当前版本是单用户 MVP；多租户身份、任务归属和行级隔离尚未实现。
@@ -36,11 +36,15 @@ docker compose up -d --build
 - RabbitMQ 管理页：<http://localhost:15672>
 
 外部模型或数据源需要在本地 `.env` 中填写对应密钥；`.env` 不会提交到 Git。
+Compose 暴露的开发端口默认只绑定到 `127.0.0.1`。
 
 ## 验证
 
 ```bash
 uv run pytest -q
+uv run pytest -q --cov=module_agent --cov-fail-under=80
+uv run ruff check src tests
+uv run basedpyright src --level error
 uv run alembic check
 docker compose config --quiet
 ```

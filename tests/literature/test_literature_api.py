@@ -25,7 +25,6 @@ from module_agent.literature.domain.search import (
     SearchRequest,
 )
 from module_agent.literature.domain.run import LiteratureRun, LiteratureRunStatus
-from module_agent.literature.domain.paper import Paper
 from module_agent.literature.domain.selection import PaperSelection
 from module_agent.workflow.domain import (
     LiteratureWaitInterrupt,

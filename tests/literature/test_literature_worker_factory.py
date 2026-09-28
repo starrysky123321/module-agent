@@ -113,6 +113,15 @@ def test_module_workflow_coordinator_factory_reuses_session_and_checkpointer(
             pdf_timeout_seconds=(
                 worker_factories.app_settings.code_pdf_timeout_seconds
             ),
+            pdf_parse_timeout_seconds=(
+                worker_factories.app_settings.code_pdf_parse_timeout_seconds
+            ),
+            pdf_max_pages=(
+                worker_factories.app_settings.code_pdf_max_pages
+            ),
+            pdf_parse_memory_bytes=(
+                worker_factories.app_settings.code_pdf_parse_memory_bytes
+            ),
             landing_page_max_bytes=(
                 worker_factories.app_settings.code_landing_page_max_bytes
             ),

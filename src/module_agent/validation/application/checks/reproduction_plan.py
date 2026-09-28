@@ -70,7 +70,7 @@ class ReproductionPlanCheck:
             if requires_clarification
             else "Reproduction plan is structurally complete"
         )
-        details = {
+        details: dict[str, object] = {
             "implementation_step_count": len(plan.implementation_steps),
             "inputs": plan.inputs,
             "outputs": plan.outputs,

@@ -5,15 +5,14 @@ from pypdf.errors import PyPdfError
 
 from module_agent.code.adapters.paper_links import PaperLinkRepositorySearcher
 from module_agent.code.adapters.pdf_repository import PdfRepositorySearcher
-from module_agent.code.domain.request import CodePaperInput
+from module_agent.code.domain.errors import PdfDownloadError, PdfParseError
 from module_agent.code.domain.repository import (
     RepositoryCandidate,
     RepositoryEvidence,
     RepositoryEvidenceType,
 )
-from module_agent.code.domain.errors import PdfDownloadError
+from module_agent.code.domain.request import CodePaperInput
 from module_agent.shared.logging import logger
-
 
 
 class GitHubRepositorySearcher:
@@ -27,6 +26,9 @@ class GitHubRepositorySearcher:
         api_version: str = "2022-11-28",
         pdf_max_bytes: int = 25 * 1024 * 1024,
         pdf_timeout_seconds: float = 30.0,
+        pdf_parse_timeout_seconds: float = 15.0,
+        pdf_max_pages: int = 200,
+        pdf_parse_memory_bytes: int = 512 * 1024 * 1024,
         landing_page_max_bytes: int = 2 * 1024 * 1024,
     ) -> None:
         """保存 GitHub HTTP 客户端和鉴权配置。"""
@@ -35,12 +37,18 @@ class GitHubRepositorySearcher:
         self.api_version = api_version.strip()
         self.pdf_max_bytes = pdf_max_bytes
         self.pdf_timeout_seconds = pdf_timeout_seconds
+        self.pdf_parse_timeout_seconds = pdf_parse_timeout_seconds
+        self.pdf_max_pages = pdf_max_pages
+        self.pdf_parse_memory_bytes = pdf_parse_memory_bytes
         self.landing_page_max_bytes = landing_page_max_bytes
         if not self.api_version:
             raise ValueError("GitHub API version cannot be empty")
         if (
             self.pdf_max_bytes <= 0
             or self.pdf_timeout_seconds <= 0
+            or self.pdf_parse_timeout_seconds <= 0
+            or self.pdf_max_pages <= 0
+            or self.pdf_parse_memory_bytes <= 0
             or self.landing_page_max_bytes <= 0
         ):
             raise ValueError("Repository discovery limits must be positive")
@@ -84,11 +92,19 @@ class GitHubRepositorySearcher:
                     self.client,
                     max_bytes=self.pdf_max_bytes,
                     timeout_seconds=self.pdf_timeout_seconds,
+                    parse_timeout_seconds=self.pdf_parse_timeout_seconds,
+                    max_pages=self.pdf_max_pages,
+                    max_memory_bytes=self.pdf_parse_memory_bytes,
                 ).search_github_links(
                     paper=paper,
                     limit=limit,
                 )
-            except (httpx.HTTPError, PdfDownloadError, PyPdfError) as exc:
+            except (
+                httpx.HTTPError,
+                PdfDownloadError,
+                PdfParseError,
+                PyPdfError,
+            ) as exc:
                 logger.warning(
                     "PDF repository discovery failed for paper {} ({}): {}",
                     paper.source_id,

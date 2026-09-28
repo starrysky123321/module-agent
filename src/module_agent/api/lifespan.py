@@ -23,6 +23,9 @@ from module_agent.shared.config import (
     app_settings,
     validate_runtime_security,
 )
+from module_agent.literature.adapters.sources.http_client import (
+    literature_http_client_manager,
+)
 
 
 
@@ -41,6 +44,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await redis_client.aclose()
         await rabbitmq_connection_manager.close()
         await github_client_manager.close()
+        await literature_http_client_manager.close()
         await qwen_client_manager.close()
         await typesafe_client_manager.close()
         

@@ -51,6 +51,8 @@ class PaperLinkRepositorySearcher:
         )
         discovered: list[tuple[str, str]] = []
         for source_url in source_urls:
+            if len(discovered) >= limit:
+                break
             if parse_github_repo_url(source_url) is not None:
                 discovered.append((source_url, source_url))
                 continue
@@ -61,7 +63,9 @@ class PaperLinkRepositorySearcher:
             )
             discovered.extend(
                 (repository_url, source_url)
-                for repository_url in extract_github_links(text)
+                for repository_url in extract_github_links(text)[
+                    : limit - len(discovered)
+                ]
             )
 
         result: list[tuple[dict[str, Any], str]] = []

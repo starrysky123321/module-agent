@@ -58,6 +58,8 @@ from module_agent.workflow.observation import (
     WorkflowNodeExecution,
     WorkflowNodeExecutionRecorder,
     WorkflowNodeExecutionStatus,
+    summarize_workflow_state,
+    workflow_node_attempt,
 )
 from module_agent.shared.logging import logger
 
@@ -258,11 +260,11 @@ class ModuleBuildWorkflow:
                     literature_run_id=literature_run_id,
                     trace_id=trace_id,
                     node=name,
-                    attempt=self._node_attempt(name, state, output),
+                    attempt=workflow_node_attempt(name, state, output),
                     status=status,
                     duration_ms=duration_ms,
-                    input_summary=self._state_summary(state),
-                    output_summary=self._state_summary(output or {}),
+                    input_summary=summarize_workflow_state(state),
+                    output_summary=summarize_workflow_state(output or {}),
                     error=error,
                 )
             )
@@ -271,45 +273,6 @@ class ModuleBuildWorkflow:
                 "workflow node observation persistence failed | node={}",
                 name,
             )
-
-    @staticmethod
-    def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "status": state.get("status"),
-            "next_step": state.get("next_step"),
-            "selected_paper_count": len(
-                state.get("selected_paper_ids") or []
-            ),
-            "code_artifact_count": len(
-                state.get("code_artifacts") or []
-            ),
-            "validation_report_count": len(
-                state.get("validation_reports") or []
-            ),
-            "has_failure": state.get("failure") is not None,
-        }
-
-    @staticmethod
-    def _node_attempt(
-        name: str,
-        state: ModuleGraphState,
-        output: dict[str, Any] | None,
-    ) -> int:
-        step_by_node = {
-            "literature_dispatch": SupervisorStep.LITERATURE.value,
-            "code": SupervisorStep.CODE.value,
-            "code_wait": SupervisorStep.CODE.value,
-            "validation": SupervisorStep.VALIDATION.value,
-        }
-        attempts = (output or {}).get("attempts") or state.get(
-            "attempts"
-        ) or {}
-        step = step_by_node.get(name)
-        if step is None:
-            return 1
-        return max(int(attempts.get(step, 1)), 1)
-
-
 
     def _paper_selection_node(
         self,

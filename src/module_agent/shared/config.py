@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Literal
 from pathlib import Path
@@ -17,7 +17,21 @@ class AppSettings(BaseSettings):
     # 生产 API 使用的 Bearer Token。
     api_auth_token: str = ""
     # 启用的文献检索来源。
-    literature_sources: list[str] = Field(default_factory=lambda: ["openalex"])
+    literature_sources: list[
+        Literal["openalex", "semantic_scholar"]
+    ] = Field(default_factory=lambda: ["openalex"], min_length=1)
+    # 文献来源 HTTP 请求超时时间。
+    literature_http_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        le=300,
+    )
+    # 文献来源共享连接池的最大连接数。
+    literature_http_max_connections: int = Field(
+        default=20,
+        ge=1,
+        le=200,
+    )
     # 论文相关性评分器的实现模式。
     literature_relevance_scorer: Literal["rule", "qwen"] = "rule"
     # 论文方法提取器的实现模式。
@@ -128,6 +142,24 @@ class AppSettings(BaseSettings):
         gt=0,
         le=300,
     )
+    # PDF 子进程解析允许的最长时间。
+    code_pdf_parse_timeout_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        le=120,
+    )
+    # 单篇 PDF 最多解析的页数。
+    code_pdf_max_pages: int = Field(
+        default=200,
+        ge=1,
+        le=2000,
+    )
+    # PDF 解析子进程允许使用的最大内存。
+    code_pdf_parse_memory_bytes: int = Field(
+        default=512 * 1024 * 1024,
+        ge=64 * 1024 * 1024,
+        le=2 * 1024 * 1024 * 1024,
+    )
     # 论文落地页和补充材料页面的最大响应大小。
     code_landing_page_max_bytes: int = Field(
         default=2 * 1024 * 1024,
@@ -156,6 +188,17 @@ class AppSettings(BaseSettings):
         ge=1,
         le=86400,
     )
+
+    @field_validator("literature_sources")
+    @classmethod
+    def reject_duplicate_literature_sources(
+        cls,
+        value: list[Literal["openalex", "semantic_scholar"]],
+    ) -> list[Literal["openalex", "semantic_scholar"]]:
+        """Reject duplicate source names before application bootstrap."""
+        if len(value) != len(set(value)):
+            raise ValueError("literature_sources must be unique")
+        return value
 
 
 

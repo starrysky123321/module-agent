@@ -17,6 +17,9 @@ from module_agent.shared.http.circuit_breaker import (
     AsyncCircuitBreaker,
     CircuitOpenError,
 )
+from module_agent.literature.adapters.sources.http_client import (
+    literature_http_client_manager,
+)
 
 semantic_scholar_rate_limiter = AsyncRateLimiter(
     min_interval_seconds=1.2
@@ -125,30 +128,30 @@ async def search_semantic_scholar(
             "Semantic Scholar circuit breaker is open"
         ) from exc
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    client = literature_http_client_manager.get_client()
 
-        async def send_request() -> httpx.Response:
-            await semantic_scholar_rate_limiter.wait()
-            return await client.get(
-                SEMANTIC_SCHOLAR_URL,
-                params=params,
-                headers=headers,
-            )
-            
-        try:
-            response = await semantic_scholar_http_retry.execute(
-                send_request,
-            )
-        except (asyncio.CancelledError, httpx.RequestError):
-            await semantic_scholar_circuit_breaker.record_failure()
-            raise
+    async def send_request() -> httpx.Response:
+        await semantic_scholar_rate_limiter.wait()
+        return await client.get(
+            SEMANTIC_SCHOLAR_URL,
+            params=params,
+            headers=headers,
+        )
 
-        if response.status_code in RETRYABLE_STATUS_CODES:
-            await semantic_scholar_circuit_breaker.record_failure()
-        else:
-            await semantic_scholar_circuit_breaker.record_success()
+    try:
+        response = await semantic_scholar_http_retry.execute(
+            send_request,
+        )
+    except (asyncio.CancelledError, httpx.RequestError):
+        await semantic_scholar_circuit_breaker.record_failure()
+        raise
 
-        response.raise_for_status()
+    if response.status_code in RETRYABLE_STATUS_CODES:
+        await semantic_scholar_circuit_breaker.record_failure()
+    else:
+        await semantic_scholar_circuit_breaker.record_success()
+
+    response.raise_for_status()
 
     papers = [
         parse_paper(item)

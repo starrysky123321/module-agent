@@ -9,7 +9,7 @@ x-app-security: &app-security
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     container_name: module-agent-postgres
     restart: unless-stopped
     environment:
@@ -17,7 +17,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-module_agent_dev}
       POSTGRES_DB: ${POSTGRES_DB:-module_agent}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - module_agent_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -30,11 +30,11 @@ services:
       start_period: 10s
 
   redis:
-    image: redis:8-alpine
+    image: redis:8-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
     container_name: module-agent-redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - module_agent_redis_data:/data
@@ -46,7 +46,7 @@ services:
 
   
   rabbitmq:
-      image: rabbitmq:4.3-management-alpine
+      image: rabbitmq:4.3-management-alpine@sha256:a1a5dd841347af3e32355fd58ac530e831fd394c49e299f862e2fd4ab331cd79
       container_name: module-agent-rabbitmq
       restart: unless-stopped
       environment:
@@ -54,9 +54,9 @@ services:
         RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-module_agent_dev}
         RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-module_agent}
       ports:
-        - "${RABBITMQ_AMQP_PORT:-5672}:5672"
-        - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
-        - "${RABBITMQ_PROMETHEUS_PORT:-15692}:15692"
+        - "127.0.0.1:${RABBITMQ_AMQP_PORT:-5672}:5672"
+        - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+        - "127.0.0.1:${RABBITMQ_PROMETHEUS_PORT:-15692}:15692"
       command:
         - sh
         - -ec
@@ -185,6 +185,47 @@ services:
       langgraph-migrate:
         condition: service_completed_successfully
 
+  code-dead-worker:
+    <<: *app-security
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-code-dead-worker
+    restart: unless-stopped
+    command: ["uv", "run", "--no-sync", "python", "-m", "module_agent.cli.run_code_dead_worker"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-module_agent}:${RABBITMQ_PASSWORD:-module_agent_dev}@rabbitmq:5672/${RABBITMQ_VHOST:-module_agent}
+      CODE_WORKER_COMPUTE_TARGET: cpu
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  code-gpu-dead-worker:
+    <<: *app-security
+    profiles: ["gpu"]
+    build: .
+    image: module-agent:dev
+    container_name: module-agent-code-gpu-dead-worker
+    restart: unless-stopped
+    command: ["uv", "run", "--no-sync", "python", "-m", "module_agent.cli.run_code_dead_worker"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-module_agent}:${POSTGRES_PASSWORD:-module_agent_dev}@postgres:5432/${POSTGRES_DB:-module_agent}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-module_agent}:${RABBITMQ_PASSWORD:-module_agent_dev}@rabbitmq:5672/${RABBITMQ_VHOST:-module_agent}
+      CODE_WORKER_COMPUTE_TARGET: gpu
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
   literature-dead-worker:
     <<: *app-security
     build: .
@@ -273,7 +314,7 @@ services:
     volumes:
       - module_agent_code_workspaces:/var/lib/module-agent/code-workspaces
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     healthcheck:
       test:
         - CMD
@@ -341,7 +382,7 @@ services:
         condition: service_healthy
 
   prometheus:
-    image: prom/prometheus:v3.7.3
+    image: prom/prometheus:v3.7.3@sha256:49214755b6153f90a597adcbff0252cc61069f8ab69ce8411285cd4a560e8038
     container_name: module-agent-prometheus
     restart: unless-stopped
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
@@ -349,7 +390,7 @@ services:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - module_agent_prometheus_data:/prometheus
     ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     depends_on:
       api:
         condition: service_healthy
@@ -357,7 +398,7 @@ services:
         condition: service_healthy
 
   grafana:
-    image: grafana/grafana:12.2.1
+    image: grafana/grafana:12.2.1@sha256:35c41e0fd0295f5d0ee5db7e780cf33506abfaf47686196f825364889dee878b
     container_name: module-agent-grafana
     restart: unless-stopped
     environment:
@@ -368,7 +409,7 @@ services:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - module_agent_grafana_data:/var/lib/grafana
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
     depends_on:
       - prometheus
 

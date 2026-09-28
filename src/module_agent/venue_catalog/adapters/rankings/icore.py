@@ -88,7 +88,10 @@ def parse_icore_page(html: str) -> list[ICOREVenueRecord]:
         if not title or not acronym or not level:
             raise ValueError("ICORE row is missing title, acronym, or rank")
 
-        detail_path = _extract_detail_path(row.get("onclick"))
+        raw_onclick = row.get("onclick")
+        detail_path = _extract_detail_path(
+            raw_onclick if isinstance(raw_onclick, str) else None
+        )
         records.append(
             ICOREVenueRecord(
                 canonical_name=title,

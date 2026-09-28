@@ -12,3 +12,15 @@ class PdfTooLargeError(PdfDownloadError):
 
 class InvalidPdfContentError(PdfDownloadError):
     """下载结果不是有效的 PDF 内容。"""
+
+
+class PdfParseError(RuntimeError):
+    """PDF could not be parsed in the isolated parser process."""
+
+
+class PdfResourceLimitError(PdfParseError):
+    """PDF parsing exceeded a configured content or resource limit."""
+
+
+class PdfParseTimeoutError(PdfResourceLimitError):
+    """PDF parsing exceeded its wall-clock time limit."""

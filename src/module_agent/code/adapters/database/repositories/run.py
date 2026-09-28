@@ -1,6 +1,7 @@
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
 from module_agent.code.adapters.database.models.run import (
     CodeRunArtifactModel,
@@ -98,7 +99,10 @@ class SqlAlchemyCodeRunRepository:
             }
         )
 
-    async def _get_one(self, *conditions: object) -> CodeRun | None:
+    async def _get_one(
+        self,
+        *conditions: ColumnElement[bool],
+    ) -> CodeRun | None:
         statement = (
             select(CodeRunModel)
             .options(selectinload(CodeRunModel.artifacts))

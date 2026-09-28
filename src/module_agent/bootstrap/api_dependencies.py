@@ -310,6 +310,13 @@ def get_code_agent() -> CodeAgent:
         search_limit=app_settings.code_repository_search_limit,
         pdf_max_bytes=app_settings.code_pdf_max_bytes,
         pdf_timeout_seconds=app_settings.code_pdf_timeout_seconds,
+        pdf_parse_timeout_seconds=(
+            app_settings.code_pdf_parse_timeout_seconds
+        ),
+        pdf_max_pages=app_settings.code_pdf_max_pages,
+        pdf_parse_memory_bytes=(
+            app_settings.code_pdf_parse_memory_bytes
+        ),
         landing_page_max_bytes=app_settings.code_landing_page_max_bytes,
     )
     

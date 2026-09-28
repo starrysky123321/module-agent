@@ -155,7 +155,7 @@ class ModuleWorkflowService:
             config,
         )
         
-        state = cast(ModuleGraphState, result)
+        state = cast(ModuleGraphState, cast(object, result))
         await self._sync_lifecycle(run_id, state)
         return state
 
@@ -192,7 +192,7 @@ class ModuleWorkflowService:
             Command(resume=signal.model_dump(mode="json")),
             config,
         )
-        state = cast(ModuleGraphState, result)
+        state = cast(ModuleGraphState, cast(object, result))
         await self._sync_lifecycle(run_id, state)
         return state
 
@@ -503,7 +503,7 @@ class ModuleWorkflowService:
             WorkflowStatus.WAITING_FOR_CODE.value: (
                 ModuleWorkflowRunStatus.WAITING_FOR_CODE
             ),
-        }.get(raw_status)
+        }.get(raw_status if isinstance(raw_status, str) else "")
         if target is None or not snapshot.interrupts:
             raise WorkflowControlError(
                 run_id,
@@ -605,7 +605,7 @@ class ModuleWorkflowService:
                 ModuleWorkflowRunStatus.CANCELLED
             ),
         }
-        lifecycle_status = mapping.get(status)
+        lifecycle_status = mapping.get(status if isinstance(status, str) else "")
         if lifecycle_status is not None:
             error = None
             failure = state.get("failure")
@@ -619,7 +619,7 @@ class ModuleWorkflowService:
             )
 
     @staticmethod
-    def _apply_timeout_failure(values: dict) -> None:
+    def _apply_timeout_failure(values: dict[str, Any]) -> None:
         raw_step = values.get("next_step", SupervisorStep.FINISH.value)
         try:
             step = SupervisorStep(raw_step)

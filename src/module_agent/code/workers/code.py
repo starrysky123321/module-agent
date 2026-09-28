@@ -6,6 +6,7 @@ from module_agent.code.domain.events import (
     CodeCompletionPublisher,
 )
 from module_agent.code.domain.jobs import CodeJob, CodeJobConsumer
+from module_agent.code.domain.run import CodeRunStatus
 from module_agent.shared.context import observability_context
 from module_agent.shared.metrics import QUEUE_JOBS
 
@@ -55,7 +56,11 @@ class CodeWorker:
                     job.request.literature_run_id,
                     job.attempt,
                 )
-                if failed is None or failed.id is None:
+                if (
+                    failed is None
+                    or failed.id is None
+                    or failed.status is not CodeRunStatus.FAILED
+                ):
                     raise
                 await self.completion_publisher.publish(
                     CodeCompletedEvent(

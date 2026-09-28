@@ -1,7 +1,11 @@
+from collections.abc import Sequence
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import case, func, select
+from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from module_agent.supervision.adapters.database.models.observation import (
     SupervisorFailureObservationModel,
@@ -10,11 +14,9 @@ from module_agent.supervision.domain import (
     FailureDisposition,
     SupervisorFailureObservation,
     SupervisorFailureCategoryStats,
-    SupervisorFailureAdvice,
     SupervisorFailureObservationRecord,
     SupervisorObservationListQuery,
     SupervisorObservationStats,
-    WorkflowFailure,
 )
 
 
@@ -137,10 +139,12 @@ class SqlAlchemySupervisorObservationRepository:
             for row in category_result.all()
         ]
 
-        return SupervisorObservationStats(
-            literature_run_id=literature_run_id,
-            **summary,
-            by_failure_category=categories,
+        return SupervisorObservationStats.model_validate(
+            {
+                "literature_run_id": literature_run_id,
+                **summary,
+                "by_failure_category": categories,
+            }
         )
 
     async def list_observations(
@@ -180,14 +184,16 @@ class SqlAlchemySupervisorObservationRepository:
         ]
 
 
-def _count_when(condition: object):
+def _count_when(condition: ColumnElement[bool]):
     return func.coalesce(
         func.sum(case((condition, 1), else_=0)),
         0,
     )
 
 
-def _aggregate_values(row: object) -> dict[str, int | float | None]:
+def _aggregate_values(
+    row: Row[Any] | Sequence[object],
+) -> dict[str, object]:
     (
         total,
         successes,
@@ -200,13 +206,13 @@ def _aggregate_values(row: object) -> dict[str, int | float | None]:
         average_confidence,
         average_latency_ms,
     ) = row
-    total_count = int(total)
-    success_count = int(successes)
-    agreement_count = int(agreements)
-    disagreement_count = int(disagreements)
-    high_confidence_count = int(high_confidence)
+    total_count = int(str(total))
+    success_count = int(str(successes))
+    agreement_count = int(str(agreements))
+    disagreement_count = int(str(disagreements))
+    high_confidence_count = int(str(high_confidence))
     high_confidence_disagreement_count = int(
-        high_confidence_disagreements
+        str(high_confidence_disagreements)
     )
 
     return {
@@ -219,8 +225,8 @@ def _aggregate_values(row: object) -> dict[str, int | float | None]:
         "high_confidence_disagreement_count": (
             high_confidence_disagreement_count
         ),
-        "retry_advice_count": int(retries),
-        "stop_advice_count": int(stops),
+        "retry_advice_count": int(str(retries)),
+        "stop_advice_count": int(str(stops)),
         "advice_success_rate": _ratio(success_count, total_count),
         "agreement_rate": _ratio(
             agreement_count,
@@ -235,11 +241,15 @@ def _aggregate_values(row: object) -> dict[str, int | float | None]:
     }
 
 
-def _category_stats(row: object) -> SupervisorFailureCategoryStats:
+def _category_stats(
+    row: Row[Any] | Sequence[object],
+) -> SupervisorFailureCategoryStats:
     category, *aggregate_row = row
-    return SupervisorFailureCategoryStats(
-        category=category,
-        **_aggregate_values(aggregate_row),
+    return SupervisorFailureCategoryStats.model_validate(
+        {
+            "category": category,
+            **_aggregate_values(aggregate_row),
+        }
     )
 
 
@@ -250,7 +260,7 @@ def _ratio(numerator: int, denominator: int) -> float | None:
 
 
 def _optional_float(value: object) -> float | None:
-    return round(float(value), 4) if value is not None else None
+    return round(float(str(value)), 4) if value is not None else None
 
 
 def _observation_filters(
@@ -258,9 +268,9 @@ def _observation_filters(
     literature_run_id: int | None,
     created_from: datetime | None,
     created_to: datetime | None,
-) -> list[object]:
+) -> list[ColumnElement[bool]]:
     model = SupervisorFailureObservationModel
-    filters: list[object] = []
+    filters: list[ColumnElement[bool]] = []
     if literature_run_id is not None:
         filters.append(model.literature_run_id == literature_run_id)
     if created_from is not None:
@@ -273,37 +283,39 @@ def _observation_filters(
 def _to_record(
     model: SupervisorFailureObservationModel,
 ) -> SupervisorFailureObservationRecord:
-    advice = None
+    advice: dict[str, object] | None = None
     if model.jev_disposition is not None:
-        advice = SupervisorFailureAdvice(
-            disposition=model.jev_disposition,
-            confidence=model.confidence,
-            probabilities={
+        advice = {
+            "disposition": model.jev_disposition,
+            "confidence": model.confidence,
+            "probabilities": {
                 FailureDisposition.RETRY: model.retry_probability,
                 FailureDisposition.STOP: model.stop_probability,
             },
-            model=model.model,
-            request_id=model.request_id,
-            latency_ms=model.latency_ms,
-        )
+            "model": model.model,
+            "request_id": model.request_id,
+            "latency_ms": model.latency_ms,
+        }
 
-    return SupervisorFailureObservationRecord(
-        id=model.id,
-        literature_run_id=model.literature_run_id,
-        failure=WorkflowFailure(
-            step=model.failure_step,
-            category=model.failure_category,
-            message=model.failure_message,
-            retryable=model.failure_retryable,
-            attempt=model.failure_attempt,
-            error_type=model.failure_error_type,
-        ),
-        rule_disposition=model.rule_disposition,
-        advice=advice,
-        agrees=model.agrees,
-        meets_confidence_threshold=(
-            model.meets_confidence_threshold
-        ),
-        error=model.error,
-        created_at=model.created_at,
+    return SupervisorFailureObservationRecord.model_validate(
+        {
+            "id": model.id,
+            "literature_run_id": model.literature_run_id,
+            "failure": {
+                "step": model.failure_step,
+                "category": model.failure_category,
+                "message": model.failure_message,
+                "retryable": model.failure_retryable,
+                "attempt": model.failure_attempt,
+                "error_type": model.failure_error_type,
+            },
+            "rule_disposition": model.rule_disposition,
+            "advice": advice,
+            "agrees": model.agrees,
+            "meets_confidence_threshold": (
+                model.meets_confidence_threshold
+            ),
+            "error": model.error,
+            "created_at": model.created_at,
+        }
     )

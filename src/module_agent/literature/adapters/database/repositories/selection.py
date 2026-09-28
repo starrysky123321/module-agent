@@ -20,7 +20,7 @@ class SqlAlchemyPaperSelectionRepository:
     async def create(self, selection: PaperSelection) -> PaperSelection:
         
         """创建并保存对应记录。"""
-        values = {
+        values: dict[str, object] = {
             "run_id": selection.run_id,
             "selected_paper_ids": list(selection.selected_paper_ids),
             "code_requirements": selection.code_requirements,

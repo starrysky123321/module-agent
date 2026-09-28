@@ -1,8 +1,12 @@
 import asyncio
 import ipaddress
+import multiprocessing
 import re
 import socket
+from contextlib import suppress
 from io import BytesIO
+from math import ceil
+from multiprocessing.connection import Connection
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -12,6 +16,9 @@ from pypdf import PdfReader
 from module_agent.code.domain.errors import (
     InvalidPdfContentError,
     PdfDownloadError,
+    PdfParseError,
+    PdfParseTimeoutError,
+    PdfResourceLimitError,
     PdfTooLargeError,
     UnsafePdfUrlError,
 )
@@ -20,6 +27,12 @@ from module_agent.code.domain.request import CodePaperInput
 MAX_PDF_BYTES = 25 * 1024 * 1024
 MAX_TEXT_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 5
+MAX_PDF_PAGES = 200
+MAX_PDF_LINKS = 100
+MAX_PDF_TEXT_CHARACTERS = 2_000_000
+MAX_PDF_ANNOTATIONS = 5_000
+MAX_PDF_PARSE_MEMORY_BYTES = 512 * 1024 * 1024
+PDF_PARSE_TIMEOUT_SECONDS = 15.0
 PDF_HEADER = b"%PDF-"
 
 GITHUB_PATTERN = re.compile(
@@ -39,13 +52,25 @@ class PdfRepositorySearcher:
         *,
         max_bytes: int = MAX_PDF_BYTES,
         timeout_seconds: float = 30.0,
+        parse_timeout_seconds: float = PDF_PARSE_TIMEOUT_SECONDS,
+        max_pages: int = MAX_PDF_PAGES,
+        max_memory_bytes: int = MAX_PDF_PARSE_MEMORY_BYTES,
     ) -> None:
         """保存用于读取 GitHub 元数据的客户端。"""
-        if max_bytes <= 0 or timeout_seconds <= 0:
+        if (
+            max_bytes <= 0
+            or timeout_seconds <= 0
+            or parse_timeout_seconds <= 0
+            or max_pages <= 0
+            or max_memory_bytes <= 0
+        ):
             raise ValueError("PDF download limits must be positive")
         self.client = client
         self.max_bytes = max_bytes
         self.timeout_seconds = timeout_seconds
+        self.parse_timeout_seconds = parse_timeout_seconds
+        self.max_pages = max_pages
+        self.max_memory_bytes = max_memory_bytes
     
     async def search_github_links(
         self,
@@ -70,7 +95,13 @@ class PdfRepositorySearcher:
             timeout_seconds=self.timeout_seconds,
         )
         
-        github_links = await asyncio.to_thread(extract, pdf_bytes)
+        github_links = await extract_pdf_links(
+            pdf_bytes,
+            timeout_seconds=self.parse_timeout_seconds,
+            max_pages=self.max_pages,
+            max_links=limit,
+            max_memory_bytes=self.max_memory_bytes,
+        )
         github_links_limit = github_links[:limit]
         
         repositories: list[dict[str, Any]] = []
@@ -276,17 +307,163 @@ async def _validate_public_http_url(url: str) -> None:
                 
         
 
-def extract(pdf_bytes: bytes) -> list[str]:
+async def extract_pdf_links(
+    pdf_bytes: bytes,
+    *,
+    timeout_seconds: float = PDF_PARSE_TIMEOUT_SECONDS,
+    max_pages: int = MAX_PDF_PAGES,
+    max_links: int = MAX_PDF_LINKS,
+    max_text_characters: int = MAX_PDF_TEXT_CHARACTERS,
+    max_annotations: int = MAX_PDF_ANNOTATIONS,
+    max_memory_bytes: int = MAX_PDF_PARSE_MEMORY_BYTES,
+) -> list[str]:
+    """Parse untrusted PDF bytes in a killable subprocess."""
+    limits = (
+        timeout_seconds,
+        max_pages,
+        max_links,
+        max_text_characters,
+        max_annotations,
+        max_memory_bytes,
+    )
+    if any(value <= 0 for value in limits):
+        raise ValueError("PDF parsing limits must be positive")
+
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_extract_worker,
+        args=(
+            sender,
+            pdf_bytes,
+            max_pages,
+            max_links,
+            max_text_characters,
+            max_annotations,
+            max_memory_bytes,
+            ceil(timeout_seconds),
+        ),
+        daemon=True,
+    )
+    process.start()
+    sender.close()
+    try:
+        try:
+            status, payload = await asyncio.wait_for(
+                asyncio.to_thread(receiver.recv),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise PdfParseTimeoutError(
+                f"PDF parsing exceeded {timeout_seconds:g} seconds"
+            ) from exc
+        except EOFError as exc:
+            raise PdfParseError(
+                "PDF parser process exited without returning a result"
+            ) from exc
+    finally:
+        receiver.close()
+        if process.is_alive():
+            process.terminate()
+        await asyncio.to_thread(process.join, 1.0)
+        if process.is_alive():
+            process.kill()
+            await asyncio.to_thread(process.join)
+
+    if status == "ok":
+        return list(payload)
+    if status == "limit":
+        raise PdfResourceLimitError(str(payload))
+    raise PdfParseError(str(payload))
+
+
+def _extract_worker(
+    connection: Connection,
+    pdf_bytes: bytes,
+    max_pages: int,
+    max_links: int,
+    max_text_characters: int,
+    max_annotations: int,
+    max_memory_bytes: int,
+    max_cpu_seconds: int,
+) -> None:
+    """Run PDF extraction inside an isolated child process."""
+    try:
+        _apply_parser_resource_limits(
+            max_memory_bytes=max_memory_bytes,
+            max_cpu_seconds=max_cpu_seconds,
+        )
+        links = extract(
+            pdf_bytes,
+            max_pages=max_pages,
+            max_links=max_links,
+            max_text_characters=max_text_characters,
+            max_annotations=max_annotations,
+        )
+        connection.send(("ok", links))
+    except PdfResourceLimitError as exc:
+        connection.send(("limit", str(exc)))
+    # The process boundary must serialize every parser failure to its parent.
+    except Exception as exc:  # noqa: BLE001
+        connection.send(("error", f"{type(exc).__name__}: {exc}"))
+    finally:
+        with suppress(Exception):
+            connection.close()
+
+
+def _apply_parser_resource_limits(
+    *,
+    max_memory_bytes: int,
+    max_cpu_seconds: int,
+) -> None:
+    """Apply process limits when the resource module is available."""
+    try:
+        import resource
+    except ImportError:
+        return
+    resource.setrlimit(
+        resource.RLIMIT_AS,
+        (max_memory_bytes, max_memory_bytes),
+    )
+    resource.setrlimit(
+        resource.RLIMIT_CPU,
+        (max_cpu_seconds, max_cpu_seconds + 1),
+    )
+
+
+def extract(
+    pdf_bytes: bytes,
+    *,
+    max_pages: int = MAX_PDF_PAGES,
+    max_links: int = MAX_PDF_LINKS,
+    max_text_characters: int = MAX_PDF_TEXT_CHARACTERS,
+    max_annotations: int = MAX_PDF_ANNOTATIONS,
+) -> list[str]:
     """从PDF文件中提取GitHub链接。"""
     pdf_file = BytesIO(pdf_bytes)
     reader = PdfReader(pdf_file)
 
+    page_count = len(reader.pages)
+    if page_count > max_pages:
+        raise PdfResourceLimitError(
+            f"PDF has {page_count} pages, above the {max_pages}-page limit"
+        )
+
     links: set[str] = set()
+    text_characters = 0
+    annotation_count = 0
 
     for page in reader.pages:
         # 1. 正文里的 URL
         text = page.extract_text() or ""
+        text_characters += len(text)
+        if text_characters > max_text_characters:
+            raise PdfResourceLimitError(
+                "PDF extracted text exceeds the configured character limit"
+            )
         links.update(extract_github_links(text))
+        if len(links) >= max_links:
+            return sorted(links)[:max_links]
 
         # 2. PDF hyperlink annotation
         annotations = page.get("/Annots")
@@ -295,6 +472,11 @@ def extract(pdf_bytes: bytes) -> list[str]:
             continue
 
         for annotation_ref in annotations:
+            annotation_count += 1
+            if annotation_count > max_annotations:
+                raise PdfResourceLimitError(
+                    "PDF annotations exceed the configured limit"
+                )
             annotation = annotation_ref.get_object()
 
             action = annotation.get("/A")
@@ -306,8 +488,10 @@ def extract(pdf_bytes: bytes) -> list[str]:
                 continue
 
             links.update(extract_github_links(uri))
+            if len(links) >= max_links:
+                return sorted(links)[:max_links]
 
-    return sorted(links)
+    return sorted(links)[:max_links]
 
 
 def extract_github_links(text: str) -> list[str]:

@@ -3,7 +3,7 @@ import asyncio
 import httpx
 import pytest
 
-import module_agent.code.adapters.pdf_repository as pdf_repository
+from module_agent.code.adapters import pdf_repository
 from module_agent.code.adapters.github import GitHubRepositorySearcher
 from module_agent.code.application.scoring import RepositoryScoringService
 from module_agent.code.domain.repository import (
@@ -139,12 +139,12 @@ def test_github_searcher_includes_repository_found_in_pdf(
         assert url == "https://papers.test/paper.pdf"
         return b"%PDF-fake"
 
-    def fake_extract(pdf_bytes: bytes) -> list[str]:
+    async def fake_extract(pdf_bytes: bytes, **_: object) -> list[str]:
         assert pdf_bytes == b"%PDF-fake"
         return ["https://github.com/alice/pdf-code"]
 
     monkeypatch.setattr(pdf_repository, "download", fake_download)
-    monkeypatch.setattr(pdf_repository, "extract", fake_extract)
+    monkeypatch.setattr(pdf_repository, "extract_pdf_links", fake_extract)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/search/repositories":

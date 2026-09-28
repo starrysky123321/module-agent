@@ -19,6 +19,9 @@ from module_agent.literature.adapters.messaging.completion_publisher import (
 from module_agent.bootstrap.worker_factories import build_literature_run_executor
 from module_agent.literature.workers.search import LiteratureWorker
 from module_agent.shared.llm.qwen_client import qwen_client_manager
+from module_agent.literature.adapters.sources.http_client import (
+    literature_http_client_manager,
+)
 
 async def run_worker() -> None:
     """执行当前任务。"""
@@ -44,6 +47,7 @@ async def run_worker() -> None:
         await rabbitmq_connection_manager.close()
         await redis_client.aclose()
         await database_engine.dispose()
+        await literature_http_client_manager.close()
         await qwen_client_manager.close()
 
 def main() -> None:

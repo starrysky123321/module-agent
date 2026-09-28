@@ -1,6 +1,7 @@
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
 from module_agent.validation.adapters.database.models.run import (
     ValidationRunModel,
@@ -103,7 +104,7 @@ class SqlAlchemyValidationRunRepository:
 
     async def _get_one(
         self,
-        *conditions: object,
+        *conditions: ColumnElement[bool],
     ) -> ValidationRun | None:
         statement = (
             select(ValidationRunModel)

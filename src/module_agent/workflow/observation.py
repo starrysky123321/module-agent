@@ -1,9 +1,12 @@
 from datetime import datetime
 from enum import StrEnum
+from collections.abc import Mapping
 from typing import Annotated, Any, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from module_agent.workflow.domain import SupervisorStep
 
 
 class WorkflowNodeExecutionStatus(StrEnum):
@@ -81,3 +84,40 @@ class WorkflowRuntimeMetrics(BaseModel):
         default=None,
         ge=0,
     )
+
+
+def summarize_workflow_state(
+    state: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return a small, non-sensitive state summary for observability."""
+    return {
+        "status": state.get("status"),
+        "next_step": state.get("next_step"),
+        "selected_paper_count": len(
+            state.get("selected_paper_ids") or []
+        ),
+        "code_artifact_count": len(state.get("code_artifacts") or []),
+        "validation_report_count": len(
+            state.get("validation_reports") or []
+        ),
+        "has_failure": state.get("failure") is not None,
+    }
+
+
+def workflow_node_attempt(
+    name: str,
+    state: Mapping[str, Any],
+    output: Mapping[str, Any] | None,
+) -> int:
+    """Resolve the logical retry attempt represented by a graph node."""
+    step_by_node = {
+        "literature_dispatch": SupervisorStep.LITERATURE.value,
+        "code": SupervisorStep.CODE.value,
+        "code_wait": SupervisorStep.CODE.value,
+        "validation": SupervisorStep.VALIDATION.value,
+    }
+    attempts = (output or {}).get("attempts") or state.get("attempts") or {}
+    step = step_by_node.get(name)
+    if step is None:
+        return 1
+    return max(int(attempts.get(step, 1)), 1)

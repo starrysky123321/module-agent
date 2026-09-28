@@ -1,21 +1,25 @@
 import asyncio
+from io import BytesIO
 
 import httpx
 import pytest
+from pypdf import PdfWriter
 
 from module_agent.code.adapters.pdf_repository import (
     PdfRepositorySearcher,
     download,
+    extract,
     extract_github_links,
+    extract_pdf_links,
     parse_github_repo_url,
 )
 from module_agent.code.domain.errors import (
     InvalidPdfContentError,
+    PdfResourceLimitError,
     PdfTooLargeError,
     UnsafePdfUrlError,
 )
 from module_agent.code.domain.request import CodePaperInput
-
 
 PUBLIC_PDF_URL = "https://93.184.216.34/paper.pdf"
 
@@ -147,6 +151,32 @@ def test_extract_github_links_normalizes_wrapped_and_git_urls() -> None:
     assert parse_github_repo_url(
         "https://github.com/alice/segment-anything.git?download=1"
     ) == ("alice", "segment-anything")
+
+
+def _pdf_with_blank_pages(page_count: int) -> bytes:
+    writer = PdfWriter()
+    for _ in range(page_count):
+        writer.add_blank_page(width=100, height=100)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def test_extract_rejects_pdf_above_page_limit() -> None:
+    with pytest.raises(PdfResourceLimitError, match="page limit"):
+        extract(_pdf_with_blank_pages(2), max_pages=1)
+
+
+def test_isolated_extractor_parses_pdf_within_limits() -> None:
+    result = asyncio.run(
+        extract_pdf_links(
+            _pdf_with_blank_pages(1),
+            timeout_seconds=5,
+            max_pages=1,
+        )
+    )
+
+    assert result == []
 
 
 @pytest.mark.parametrize("limit", [0, -1, 101])

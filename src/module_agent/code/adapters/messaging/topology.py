@@ -36,6 +36,19 @@ async def declare_code_job_topology(
     )
 
 
+async def declare_code_dead_queue(
+    channel: AbstractChannel,
+    *,
+    target: ComputeTarget,
+) -> AbstractQueue:
+    """Declare and return the dead-letter queue for a compute pool."""
+    return await channel.declare_queue(
+        f"{code_queue_name(target)}.dead",
+        durable=True,
+        arguments={"x-queue-type": "quorum"},
+    )
+
+
 async def declare_code_completion_topology(
     channel: AbstractChannel,
 ) -> AbstractQueue:

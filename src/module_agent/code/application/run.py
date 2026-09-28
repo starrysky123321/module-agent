@@ -104,6 +104,8 @@ class CodeRunService:
             workflow_id=request.literature_run_id,
             agent_run_id=saved.id,
         ):
+            if saved.finished_at is None:
+                raise RuntimeError("Completed CodeRun has no finished_at")
             duration_ms = (
                 saved.finished_at - saved.started_at
             ).total_seconds() * 1000

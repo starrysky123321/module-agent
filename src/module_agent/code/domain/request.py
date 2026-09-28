@@ -1,14 +1,24 @@
 from typing import Annotated
 
-from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from module_agent.literature.domain.method import PaperMethodProfile
-
 
 NonEmptyText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
 ]
+AuthorName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
+]
+ExternalUrl = Annotated[str, StringConstraints(max_length=2048)]
 
 
 class CodePaperInput(BaseModel):
@@ -23,19 +33,22 @@ class CodePaperInput(BaseModel):
     # 论文标题，用于仓库搜索和匹配。
     title: NonEmptyText
     # 作者姓名，用于识别作者仓库。
-    authors: list[str] = Field(default_factory=list)
+    authors: list[AuthorName] = Field(default_factory=list, max_length=100)
     # DOI，用于验证仓库与论文的对应关系。
-    doi: str | None = None
+    doi: Annotated[str, StringConstraints(max_length=300)] | None = None
     # 摘要，为复现计划提供方法上下文。
-    abstract: str | None = None
+    abstract: Annotated[str, StringConstraints(max_length=100_000)] | None = None
     # 论文落地页，用于寻找直接代码链接。
-    landing_page_url: str | None = None
+    landing_page_url: ExternalUrl | None = None
     # Literature Agent 提取的方法画像。
     method_profile: PaperMethodProfile | None = None
     # 论文 PDF 地址，用于从正文提取代码仓库链接。
-    pdf_url: str | None = None
+    pdf_url: ExternalUrl | None = None
     # 论文补充材料地址，用于发现额外的官方代码链接。
-    supplementary_urls: list[str] = Field(default_factory=list)
+    supplementary_urls: list[ExternalUrl] = Field(
+        default_factory=list,
+        max_length=20,
+    )
 
 
 class CodeAgentRequest(BaseModel):

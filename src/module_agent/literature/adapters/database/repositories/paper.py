@@ -128,28 +128,34 @@ class SqlAlchemyPaperRepository:
 
     @staticmethod
     def _to_domain(model: PaperModel) -> Paper:
-        return Paper(
-            id=model.id,
-            source=model.source,
-            source_id=model.source_id,
-            title=model.title,
-            authors=list(model.authors),
-            publication_year=model.publication_year,
-            publication_date=model.publication_date,
-            publication_type=model.publication_type,
-            venue_id=model.venue_id,
-            venue_name=model.venue_name,
-            doi=model.doi,
-            abstract=model.abstract,
-            landing_page_url=model.landing_page_url,
-            pdf_url=model.pdf_url,
-            is_open_access=model.is_open_access,
-            open_access_status=model.open_access_status,
-            cited_by_count=model.cited_by_count,
-            code_availability=model.code_availability or "unknown",
-            code_repository_url=model.code_repository_url,
-            code_repository_confidence=model.code_repository_confidence,
-            code_repository_evidence=list(
-                model.code_repository_evidence or []
-            ),
+        return Paper.model_validate(
+            {
+                "id": model.id,
+                "source": model.source,
+                "source_id": model.source_id,
+                "title": model.title,
+                "authors": list(model.authors),
+                "publication_year": model.publication_year,
+                "publication_date": model.publication_date,
+                "publication_type": model.publication_type,
+                "venue_id": model.venue_id,
+                "venue_name": model.venue_name,
+                "doi": model.doi,
+                "abstract": model.abstract,
+                "landing_page_url": model.landing_page_url,
+                "pdf_url": model.pdf_url,
+                "is_open_access": model.is_open_access,
+                "open_access_status": model.open_access_status,
+                "cited_by_count": model.cited_by_count,
+                "code_availability": (
+                    model.code_availability or "unknown"
+                ),
+                "code_repository_url": model.code_repository_url,
+                "code_repository_confidence": (
+                    model.code_repository_confidence
+                ),
+                "code_repository_evidence": list(
+                    model.code_repository_evidence or []
+                ),
+            }
         )

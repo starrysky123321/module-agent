@@ -37,7 +37,6 @@ from module_agent.validation.application.run import ValidationRunService
 from module_agent.validation.adapters.database.repositories.run import (
     TransactionalValidationRunRepository,
 )
-from module_agent.supervision.application.agent import SupervisorAgent
 from module_agent.literature.adapters.database.repositories.selection import (
     SqlAlchemyPaperSelectionRepository,
 )
@@ -145,9 +144,9 @@ def build_literature_run_service(session: AsyncSession) -> LiteratureRunService:
     return run_service
 
 
-def build_code_run_service() -> CodeRunService:
-    """Build the durable Code Agent application service for a worker."""
-    code_agent = build_code_agent(
+def _build_configured_code_agent() -> CodeAgent:
+    """Build the shared Code Agent configuration used by workflow workers."""
+    return build_code_agent(
         github_client=github_client_manager.get_client(),
         github_token=app_settings.github_token,
         github_api_version=app_settings.github_api_version,
@@ -161,8 +160,20 @@ def build_code_run_service() -> CodeRunService:
         search_limit=app_settings.code_repository_search_limit,
         pdf_max_bytes=app_settings.code_pdf_max_bytes,
         pdf_timeout_seconds=app_settings.code_pdf_timeout_seconds,
+        pdf_parse_timeout_seconds=(
+            app_settings.code_pdf_parse_timeout_seconds
+        ),
+        pdf_max_pages=app_settings.code_pdf_max_pages,
+        pdf_parse_memory_bytes=(
+            app_settings.code_pdf_parse_memory_bytes
+        ),
         landing_page_max_bytes=app_settings.code_landing_page_max_bytes,
     )
+
+
+def build_code_run_service() -> CodeRunService:
+    """Build the durable Code Agent application service for a worker."""
+    code_agent = _build_configured_code_agent()
     return CodeRunService(
         code_agent,
         TransactionalCodeRunRepository(async_session_factory),
@@ -188,22 +199,7 @@ def build_module_workflow_coordinator(
             rabbitmq_connection_manager
         ),
     )
-    code_agent = build_code_agent(
-        github_client=github_client_manager.get_client(),
-        github_token=app_settings.github_token,
-        github_api_version=app_settings.github_api_version,
-        qwen_client_manager=qwen_client_manager,
-        qwen_model=app_settings.qwen_model,
-        workspace_root=app_settings.code_workspace_root,
-        git_timeout_seconds=app_settings.git_clone_timeout_seconds,
-        confidence_threshold=(
-            app_settings.code_repository_confidence_threshold
-        ),
-        search_limit=app_settings.code_repository_search_limit,
-        pdf_max_bytes=app_settings.code_pdf_max_bytes,
-        pdf_timeout_seconds=app_settings.code_pdf_timeout_seconds,
-        landing_page_max_bytes=app_settings.code_landing_page_max_bytes,
-    )
+    code_agent = _build_configured_code_agent()
     validation_agent = build_validation_agent(
         workspace_root=app_settings.code_workspace_root,
         sandbox_image=app_settings.validation_sandbox_image,

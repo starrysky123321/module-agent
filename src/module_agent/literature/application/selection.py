@@ -2,9 +2,7 @@ from module_agent.literature.domain.repositories.run import LiteratureRunReposit
 from module_agent.workflow.domain import PaperSelectionRequest
 from module_agent.shared.exceptions import LiteratureRunNotFoundError, LiteratureRunStateError
 from module_agent.literature.domain.run import LiteratureRunStatus
-from module_agent.literature.domain.recommendation import LiteratureRunPaper
 from module_agent.literature.domain.repositories.selection import PaperSelectionRepository
-from datetime import datetime
 from module_agent.literature.domain.selection import PaperSelection
 from module_agent.shared.exceptions import PaperSelectionAlreadyExistsError, InvalidPaperSelectionError
 

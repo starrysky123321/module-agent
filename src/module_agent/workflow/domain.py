@@ -1,5 +1,5 @@
 from enum import StrEnum
-from typing import Any, Literal, TypedDict
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field, model_validator
 

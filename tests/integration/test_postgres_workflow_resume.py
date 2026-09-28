@@ -2,7 +2,7 @@ import asyncio
 import os
 from pathlib import Path
 from uuid import uuid4
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver

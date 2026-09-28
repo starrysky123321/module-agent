@@ -23,7 +23,7 @@ from module_agent.validation.application.static_validator import (
 from module_agent.validation.application.status import (
     ValidationStatusResolver,
 )
-from module_agent.validation.domain.ports import SandboxRunner
+from module_agent.validation.domain.ports import SandboxRunner, StaticCheck
 from module_agent.validation.domain.report import (
     ValidationCheck,
     ValidationCheckKind,
@@ -147,7 +147,7 @@ class ValidationAgent:
                 "is configured"
             )
 
-        checks = [
+        checks: list[StaticCheck] = [
             PythonSyntaxCheck(self.sandbox_runner, request.policy),
         ]
         options = request.sandbox_options

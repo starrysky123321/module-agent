@@ -3,7 +3,6 @@ import json
 import re
 import tomllib
 from pathlib import Path
-from typing import Any
 
 from module_agent.code.domain.artifact import RepositoryAnalysis
 from module_agent.code.domain.request import CodePaperInput

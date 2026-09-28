@@ -13,7 +13,6 @@ from module_agent.code.adapters.messaging.job_consumer import (
 )
 from module_agent.code.domain.jobs import ComputeTarget
 from module_agent.code.workers.code import CodeWorker
-from module_agent.shared.config import app_settings
 from module_agent.shared.database.session import database_engine
 from module_agent.shared.llm.qwen_client import qwen_client_manager
 from module_agent.shared.messaging.rabbitmq import rabbitmq_connection_manager

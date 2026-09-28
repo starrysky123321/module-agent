@@ -251,6 +251,15 @@ def test_code_agent_dependency_uses_shared_clients_and_settings(
             pdf_timeout_seconds=(
                 api_dependencies.app_settings.code_pdf_timeout_seconds
             ),
+            pdf_parse_timeout_seconds=(
+                api_dependencies.app_settings.code_pdf_parse_timeout_seconds
+            ),
+            pdf_max_pages=(
+                api_dependencies.app_settings.code_pdf_max_pages
+            ),
+            pdf_parse_memory_bytes=(
+                api_dependencies.app_settings.code_pdf_parse_memory_bytes
+            ),
             landing_page_max_bytes=(
                 api_dependencies.app_settings.code_landing_page_max_bytes
             ),

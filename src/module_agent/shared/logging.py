@@ -12,7 +12,7 @@ from module_agent.shared.context import (
 )
 
 
-def _inject_context(record: dict[str, Any]) -> None:
+def _inject_context(record: Any) -> None:
     record["extra"]["request_id"] = request_id_ctx_var.get() or "-"
     record["extra"]["trace_id"] = trace_id_ctx_var.get() or "-"
     record["extra"]["workflow_id"] = workflow_id_ctx_var.get() or "-"

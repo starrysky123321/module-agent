@@ -1,7 +1,9 @@
 from typing import Any
 
-import httpx
 
+from module_agent.literature.adapters.sources.http_client import (
+    literature_http_client_manager,
+)
 from module_agent.shared.config import app_settings
 from module_agent.literature.domain.search import PaperSearchResult, SearchRequest
 from module_agent.literature.domain.normalization import normalize_doi
@@ -90,8 +92,8 @@ async def search_openalex(query: SearchRequest) -> list[PaperSearchResult]:
     if app_settings.openalex_api_key:
         params["api_key"] = app_settings.openalex_api_key
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(OPENALEX_WORKS_URL, params=params)
-        response.raise_for_status()
+    client = literature_http_client_manager.get_client()
+    response = await client.get(OPENALEX_WORKS_URL, params=params)
+    response.raise_for_status()
 
     return [parse_work(work) for work in response.json().get("results", [])]
