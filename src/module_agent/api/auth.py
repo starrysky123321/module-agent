@@ -34,6 +34,7 @@ def register_api_auth_middleware(
                 },
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        request.state.authenticated = True
         return await call_next(request)
 
 
@@ -46,6 +47,7 @@ def _requires_authentication(
     public_paths = {
         f"{settings.api_prefix}/health/",
         f"{settings.api_prefix}/health",
+        f"{settings.api_prefix}/health/ready",
         "/docs",
         "/openapi.json",
         "/metrics",

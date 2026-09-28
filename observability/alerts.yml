@@ -1,0 +1,54 @@
+groups:
+  - name: module-agent-availability
+    rules:
+      - alert: ModuleAgentTargetDown
+        expr: up{job=~"module-agent-api|module-agent-workers|rabbitmq"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Module Agent target is unavailable"
+          description: "{{ $labels.job }} target {{ $labels.instance }} has been down for 2 minutes."
+
+      - alert: ModuleAgentHighHttpErrorRate
+        expr: |
+          sum(rate(module_agent_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(module_agent_http_requests_total[5m])), 0.001)
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Module Agent API has a high 5xx rate"
+          description: "More than 5% of API requests failed over the last 5 minutes."
+
+      - alert: ModuleAgentHighHttpLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(module_agent_http_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Module Agent API p95 latency is high"
+          description: "API p95 latency has exceeded 2 seconds for 10 minutes."
+
+      - alert: ModuleAgentDeadLetterQueueNotEmpty
+        expr: rabbitmq_queue_messages_ready{queue=~".*dead.*"} > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Module Agent has dead-letter jobs"
+          description: "Queue {{ $labels.queue }} contains {{ $value }} jobs requiring attention."
+
+      - alert: ModuleAgentAlertDeliveryFailures
+        expr: increase(alertmanager_notifications_failed_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alertmanager notification delivery failed"
+          description: "At least one alert notification failed in the last 10 minutes."

@@ -32,13 +32,18 @@ from module_agent.workflow.lifecycle import (
 from module_agent.workflow.lifecycle_service import (
     ModuleWorkflowLifecycleService,
 )
-from module_agent.supervision.domain import (
-    WorkflowFailure,
-    WorkflowFailureCategory,
-)
 from module_agent.shared.exceptions import WorkflowControlError
 from module_agent.shared.context import observability_context
 from module_agent.shared.logging import logger
+from module_agent.workflow.state import (
+    apply_timeout_failure,
+    build_initial_state,
+    failure_message,
+    lifecycle_status_for_graph,
+    resumable_wait_status,
+    validate_run_id,
+    workflow_config,
+)
 
 
 
@@ -66,15 +71,10 @@ class ModuleWorkflowService:
     ) -> PaperSelectionInterrupt:
         
         """启动当前流程。"""
-        if type(run_id) is not int or run_id <= 0:
-            raise ValueError("run_id must be a positive integer")
+        validate_run_id(run_id)
         
         
-        config = RunnableConfig(
-            configurable={
-                "thread_id": f"literature-run:{run_id}",
-            }
-        )
+        config = workflow_config(run_id)
         
         snapshot = await self.graph.aget_state(config)
         
@@ -94,23 +94,17 @@ class ModuleWorkflowService:
         result = await self._invoke_graph(
             run_id,
             trace_id,
-            {
-                "literature_run_id": run_id,
-                "trace_id": str(trace_id),
-                "code_requirements": code_requirements,
-                "validation_policy": (
-                    validation_policy or ValidationPolicy()
-                ).model_dump(mode="json"),
-                "sandbox_options": (
-                    sandbox_options.model_dump(mode="json")
-                    if sandbox_options is not None
-                    else None
-                ),
-                "validation_requirements": validation_requirements,
-                "compute_target": compute_target.value,
-                "status": WorkflowStatus.WAITING_FOR_PAPER_SELECTION.value,
-                "next_step": SupervisorStep.PAPER_SELECTION.value,
-            },
+            build_initial_state(
+                run_id=run_id,
+                trace_id=trace_id,
+                code_requirements=code_requirements,
+                validation_policy=validation_policy,
+                sandbox_options=sandbox_options,
+                validation_requirements=validation_requirements,
+                compute_target=compute_target,
+                status=WorkflowStatus.WAITING_FOR_PAPER_SELECTION,
+                next_step=SupervisorStep.PAPER_SELECTION,
+            ),
             config,
         )
         
@@ -130,18 +124,13 @@ class ModuleWorkflowService:
     
     async def resume_paper_selection(self, run_id: int, request: PaperSelectionRequest) -> ModuleGraphState:
         """恢复暂停的流程。"""
-        if type(run_id) is not int or run_id <= 0:
-            raise ValueError("run_id must be a positive integer")
+        validate_run_id(run_id)
         
         trace_id = await self._ensure_active(
             run_id,
             "resume paper selection",
         )
-        config = RunnableConfig(
-            configurable={
-                "thread_id": f"literature-run:{run_id}",
-            }
-        )
+        config = workflow_config(run_id)
         
         snapshot = await self.graph.aget_state(config)
 
@@ -165,14 +154,11 @@ class ModuleWorkflowService:
         code_run_id: int,
     ) -> ModuleGraphState:
         """Resume a workflow paused while an independent Code Worker ran."""
-        if type(run_id) is not int or run_id <= 0:
-            raise ValueError("run_id must be a positive integer")
+        validate_run_id(run_id)
         if type(code_run_id) is not int or code_run_id <= 0:
             raise ValueError("code_run_id must be a positive integer")
         trace_id = await self._ensure_active(run_id, "resume code workflow")
-        config = RunnableConfig(
-            configurable={"thread_id": f"literature-run:{run_id}"}
-        )
+        config = workflow_config(run_id)
         snapshot = await self.graph.aget_state(config)
         if (
             not snapshot.interrupts
@@ -208,14 +194,9 @@ class ModuleWorkflowService:
         compute_target: ComputeTarget = ComputeTarget.CPU,
     ) -> LiteratureWaitInterrupt:
         """启动当前流程。"""
-        if type(run_id) is not int or run_id <= 0:
-            raise ValueError("run_id must be a positive integer")
+        validate_run_id(run_id)
 
-        config = RunnableConfig(
-            configurable={
-                "thread_id": f"literature-run:{run_id}",
-            }
-        )
+        config = workflow_config(run_id)
 
         snapshot = await self.graph.aget_state(config)
 
@@ -240,23 +221,17 @@ class ModuleWorkflowService:
         result = await self._invoke_graph(
             run_id,
             trace_id,
-            {
-                "literature_run_id": run_id,
-                "trace_id": str(trace_id),
-                "code_requirements": code_requirements,
-                "validation_policy": (
-                    validation_policy or ValidationPolicy()
-                ).model_dump(mode="json"),
-                "sandbox_options": (
-                    sandbox_options.model_dump(mode="json")
-                    if sandbox_options is not None
-                    else None
-                ),
-                "validation_requirements": validation_requirements,
-                "compute_target": compute_target.value,
-                "status": WorkflowStatus.SEARCHING_LITERATURE.value,
-                "next_step": SupervisorStep.LITERATURE.value,
-            },
+            build_initial_state(
+                run_id=run_id,
+                trace_id=trace_id,
+                code_requirements=code_requirements,
+                validation_policy=validation_policy,
+                sandbox_options=sandbox_options,
+                validation_requirements=validation_requirements,
+                compute_target=compute_target,
+                status=WorkflowStatus.SEARCHING_LITERATURE,
+                next_step=SupervisorStep.LITERATURE,
+            ),
             config,
         )
 
@@ -282,18 +257,13 @@ class ModuleWorkflowService:
         run_id: int,
     ) -> PaperSelectionInterrupt:
         """恢复暂停的流程。"""
-        if type(run_id) is not int or run_id <= 0:
-            raise ValueError("run_id must be a positive integer")
+        validate_run_id(run_id)
         
         trace_id = await self._ensure_active(
             run_id,
             "resume literature workflow",
         )
-        config = RunnableConfig(
-            configurable={
-                "thread_id": f"literature-run:{run_id}",
-            }
-        )
+        config = workflow_config(run_id)
         
         snapshot = await self.graph.aget_state(config)
 
@@ -344,14 +314,9 @@ class ModuleWorkflowService:
         run_id: int,
     ) -> list[CodeArtifact]:
         """获取对应记录。"""
-        if type(run_id) is not int or run_id <= 0:
-            raise ValueError("run_id must be a positive integer")
+        validate_run_id(run_id)
 
-        config = RunnableConfig(
-            configurable={
-                "thread_id": f"literature-run:{run_id}",
-            }
-        )
+        config = workflow_config(run_id)
 
         snapshot = await self.graph.aget_state(config)
 
@@ -367,14 +332,9 @@ class ModuleWorkflowService:
         run_id: int,
     ) -> list[ValidationReport]:
         """获取对应记录。"""
-        if type(run_id) is not int or run_id <= 0:
-            raise ValueError("run_id must be a positive integer")
+        validate_run_id(run_id)
 
-        config = RunnableConfig(
-            configurable={
-                "thread_id": f"literature-run:{run_id}",
-            }
-        )
+        config = workflow_config(run_id)
         snapshot = await self.graph.aget_state(config)
         raw_reports = snapshot.values.get("validation_reports", [])
         return [
@@ -388,14 +348,9 @@ class ModuleWorkflowService:
         run_id: int,
     ) -> ModuleBuildResult:
         """获取对应记录。"""
-        if type(run_id) is not int or run_id <= 0:
-            raise ValueError("run_id must be a positive integer")
+        validate_run_id(run_id)
 
-        config = RunnableConfig(
-            configurable={
-                "thread_id": f"literature-run:{run_id}",
-            }
-        )
+        config = workflow_config(run_id)
 
         snapshot = await self.graph.aget_state(config)
         values = dict(snapshot.values)
@@ -416,7 +371,7 @@ class ModuleWorkflowService:
                 values["failure"] = None
                 raw_status = WorkflowStatus.CANCELLED.value
             elif lifecycle.status is ModuleWorkflowRunStatus.TIMED_OUT:
-                self._apply_timeout_failure(values)
+                apply_timeout_failure(values)
                 raw_status = WorkflowStatus.FAILED.value
 
         if raw_status not in terminal_statuses:
@@ -446,9 +401,7 @@ class ModuleWorkflowService:
         if self.lifecycle_service is None:
             raise RuntimeError("Workflow lifecycle service is not configured")
         run = await self.lifecycle_service.cancel(run_id)
-        config = RunnableConfig(
-            configurable={"thread_id": f"literature-run:{run_id}"}
-        )
+        config = workflow_config(run_id)
         with observability_context(
             trace_id=run.trace_id,
             workflow_id=run_id,
@@ -488,22 +441,10 @@ class ModuleWorkflowService:
                 run_id,
                 "only a timed-out workflow can be resumed",
             )
-        config = RunnableConfig(
-            configurable={"thread_id": f"literature-run:{run_id}"}
-        )
+        config = workflow_config(run_id)
         snapshot = await self.graph.aget_state(config)
         raw_status = snapshot.values.get("status")
-        target = {
-            WorkflowStatus.SEARCHING_LITERATURE.value: (
-                ModuleWorkflowRunStatus.WAITING_FOR_LITERATURE
-            ),
-            WorkflowStatus.WAITING_FOR_PAPER_SELECTION.value: (
-                ModuleWorkflowRunStatus.WAITING_FOR_SELECTION
-            ),
-            WorkflowStatus.WAITING_FOR_CODE.value: (
-                ModuleWorkflowRunStatus.WAITING_FOR_CODE
-            ),
-        }.get(raw_status if isinstance(raw_status, str) else "")
+        target = resumable_wait_status(raw_status)
         if target is None or not snapshot.interrupts:
             raise WorkflowControlError(
                 run_id,
@@ -592,50 +533,10 @@ class ModuleWorkflowService:
     ) -> None:
         if self.lifecycle_service is None:
             return
-        status = state.get("status")
-        mapping = {
-            WorkflowStatus.WAITING_FOR_CODE.value: (
-                ModuleWorkflowRunStatus.WAITING_FOR_CODE
-            ),
-            WorkflowStatus.COMPLETED.value: (
-                ModuleWorkflowRunStatus.COMPLETED
-            ),
-            WorkflowStatus.FAILED.value: ModuleWorkflowRunStatus.FAILED,
-            WorkflowStatus.CANCELLED.value: (
-                ModuleWorkflowRunStatus.CANCELLED
-            ),
-        }
-        lifecycle_status = mapping.get(status if isinstance(status, str) else "")
+        lifecycle_status = lifecycle_status_for_graph(state.get("status"))
         if lifecycle_status is not None:
-            error = None
-            failure = state.get("failure")
-            if isinstance(failure, dict):
-                raw_error = failure.get("message")
-                error = raw_error if isinstance(raw_error, str) else None
             await self.lifecycle_service.set_status(
                 run_id,
                 lifecycle_status,
-                error=error,
+                error=failure_message(state),
             )
-
-    @staticmethod
-    def _apply_timeout_failure(values: dict[str, Any]) -> None:
-        raw_step = values.get("next_step", SupervisorStep.FINISH.value)
-        try:
-            step = SupervisorStep(raw_step)
-        except ValueError:
-            step = SupervisorStep.FINISH
-        attempts = dict(values.get("attempts") or {})
-        attempt = max(int(attempts.get(step.value, 0)), 1)
-        attempts[step.value] = attempt
-        failure = WorkflowFailure(
-            step=step,
-            category=WorkflowFailureCategory.TIMEOUT,
-            message="Workflow deadline exceeded",
-            retryable=False,
-            attempt=attempt,
-            error_type="WorkflowTimeoutError",
-        )
-        values["attempts"] = attempts
-        values["failure"] = failure.model_dump(mode="json")
-        values["status"] = WorkflowStatus.FAILED.value

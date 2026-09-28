@@ -6,6 +6,38 @@ from pydantic import ValidationError
 from module_agent.shared.config import AppSettings
 
 
+def test_secret_can_be_loaded_from_file(tmp_path: Path) -> None:
+    secret_file = tmp_path / "github-token"
+    secret_file.write_text("secret-from-file\n", encoding="utf-8")
+
+    settings = AppSettings(
+        _env_file=None,
+        github_token_file=secret_file,
+    )
+
+    assert settings.github_token == "secret-from-file"
+
+
+def test_secret_rejects_direct_and_file_configuration(tmp_path: Path) -> None:
+    secret_file = tmp_path / "github-token"
+    secret_file.write_text("secret-from-file", encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="configure only one"):
+        AppSettings(
+            _env_file=None,
+            github_token="direct-secret",
+            github_token_file=secret_file,
+        )
+
+
+def test_secret_rejects_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="cannot read secret file"):
+        AppSettings(
+            _env_file=None,
+            qwen_api_key_file=tmp_path / "missing",
+        )
+
+
 def test_code_agent_settings_parse_environment_style_values() -> None:
     settings = AppSettings(
         _env_file=None,

@@ -14,12 +14,15 @@ def production_settings(**overrides: object) -> AppSettings:
         "database_url": (
             "postgresql+asyncpg://agent:strong-db@db:5432/agent"
         ),
+        "redis_url": "redis://agent:strong-cache@redis:6379/0",
         "rabbitmq_url": "amqp://agent:strong-mq@mq:5672/agent",
         "langgraph_database_url": (
             "postgresql://agent:strong-db@db:5432/agent"
         ),
         "code_workspace_root": Path("/var/lib/module-agent/workspaces"),
         "api_auth_token": "a-secure-production-token-that-is-long-enough",
+        "api_rate_limit_enabled": True,
+        "api_rate_limit_fail_open": False,
         "literature_query_planner": "rule",
         "literature_relevance_scorer": "rule",
         "literature_method_extractor": "off",
@@ -64,4 +67,18 @@ def test_short_api_token_is_rejected() -> None:
     settings = production_settings(api_auth_token="too-short")
 
     with pytest.raises(RuntimeError, match="API_AUTH_TOKEN"):
+        validate_runtime_security(settings)
+
+
+def test_production_requires_rate_limiting() -> None:
+    settings = production_settings(api_rate_limit_enabled=False)
+
+    with pytest.raises(RuntimeError, match="API_RATE_LIMIT_ENABLED"):
+        validate_runtime_security(settings)
+
+
+def test_production_rate_limiting_must_fail_closed() -> None:
+    settings = production_settings(api_rate_limit_fail_open=True)
+
+    with pytest.raises(RuntimeError, match="API_RATE_LIMIT_FAIL_OPEN"):
         validate_runtime_security(settings)

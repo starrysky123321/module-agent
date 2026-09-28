@@ -1,0 +1,14 @@
+route:
+  receiver: local-only
+  group_by: [alertname, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: local-only
+
+# This committed configuration keeps alerts visible in the Alertmanager UI
+# without sending them outside the machine. For real notifications, copy
+# alertmanager.webhook.example.yml to alertmanager.local.yml, configure the
+# receiver, and set ALERTMANAGER_CONFIG_FILE to that local file.

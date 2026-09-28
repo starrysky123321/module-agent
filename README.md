@@ -14,6 +14,7 @@ Supervisor Agent，并在论文选择阶段保留人工确认入口。
 - 通过 PostgreSQL、Redis、RabbitMQ 和 LangGraph checkpoint 支持异步执行、
   暂停、恢复、重试、死信恢复与追踪。
 - 提供 Prometheus 指标和 Grafana dashboard。
+- 提供依赖就绪探针、Redis API 限流、审计日志、告警规则和安全运维演练工具。
 
 当前版本是单用户 MVP；多租户身份、任务归属和行级隔离尚未实现。
 
@@ -34,6 +35,7 @@ docker compose up -d --build
 - Prometheus：<http://localhost:9090>
 - Grafana：<http://localhost:3000>
 - RabbitMQ 管理页：<http://localhost:15672>
+- Alertmanager：<http://localhost:9093>
 
 外部模型或数据源需要在本地 `.env` 中填写对应密钥；`.env` 不会提交到 Git。
 Compose 暴露的开发端口默认只绑定到 `127.0.0.1`。
@@ -48,6 +50,72 @@ uv run basedpyright src --level error
 uv run alembic check
 docker compose config --quiet
 ```
+
+## 生产运行与演练
+
+存活探针 `/api/health/` 只判断 API 进程是否存活；就绪探针
+`/api/health/ready` 会并行检查 PostgreSQL、Redis 和 RabbitMQ。Compose
+使用就绪探针判断 API 容器是否能接收真实任务。
+
+生产环境必须配置长度至少 32 位的 `API_AUTH_TOKEN`，并设置：
+
+```dotenv
+APP_ENV=production
+API_RATE_LIMIT_ENABLED=true
+API_RATE_LIMIT_FAIL_OPEN=false
+API_RATE_LIMIT_REQUESTS=120
+API_RATE_LIMIT_WINDOW_SECONDS=60
+```
+
+敏感值也可以通过 `*_FILE` 从只读秘密文件加载。例如，将本地秘密目录挂载到
+容器的 `/run/secrets` 后，设置
+`API_AUTH_TOKEN_FILE=/run/secrets/api_auth_token`。数据库、Redis、RabbitMQ、
+LangGraph、Qwen、GitHub、Semantic Scholar、OpenAlex 和 Typesafe 的对应配置
+同样支持 `_FILE` 后缀。不要同时设置同一个秘密的直接值和文件值。
+
+小规模压力测试和长时间连续运行使用同一个只读 GET 工具：
+
+```bash
+# 1000 次请求，20 并发
+uv run python -m module_agent.cli.run_api_load_test \
+  --requests 1000 --concurrency 20
+
+# 连续运行 30 分钟；请先在非生产环境确认目标路径
+uv run python -m module_agent.cli.run_api_load_test \
+  --duration-seconds 1800 --concurrency 10 \
+  --path /api/health/ready
+```
+
+报告包含吞吐、错误率、p95 和最大耗时；超过阈值时命令返回非零退出码。
+如需验证容器进程被强制终止后的恢复能力，明确确认后执行：
+
+```bash
+scripts/service_recovery_drill.sh api --confirm
+```
+
+数据库备份和恢复演练：
+
+```bash
+scripts/backup_postgres.sh
+scripts/restore_postgres_drill.sh backups/module-agent-YYYYMMDDTHHMMSSZ.dump
+```
+
+恢复脚本拒绝覆盖主库，只允许恢复到名称以 `_restore_drill` 结尾的独立数据库。
+请定期在隔离环境执行演练并检查业务表、Alembic 版本和关键记录。
+
+Prometheus 默认加载可用性、5xx、p95 延迟、死信队列和通知失败告警。
+默认 Alertmanager 只在本机 UI 展示告警。启用外部通知时：
+
+```bash
+cp observability/alertmanager.webhook.example.yml \
+  observability/alertmanager.local.yml
+chmod 600 observability/alertmanager.local.yml
+# 编辑本地文件中的通知网关，再在 .env 设置：
+# ALERTMANAGER_CONFIG_FILE=./observability/alertmanager.local.yml
+docker compose up -d alertmanager prometheus
+```
+
+`alertmanager.local.yml` 已被 Git 忽略，通知凭据不会进入仓库。
 
 GPU Worker 需要 NVIDIA Container Toolkit，并通过 profile 单独启动：
 

@@ -26,3 +26,5 @@ workspaces/
 /PROJECT_QUICKSTART.md
 /SUPERVISOR_AGENT_PLAN.md
 /VALIDATION_AGENT_PLAN.md
+/observability/alertmanager.local.yml
+/backups/

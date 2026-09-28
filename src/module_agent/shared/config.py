@@ -1,6 +1,6 @@
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Literal
+from typing import ClassVar, Literal, Self
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -16,6 +16,22 @@ class AppSettings(BaseSettings):
     api_prefix: str = "/api"
     # 生产 API 使用的 Bearer Token。
     api_auth_token: str = ""
+    # 从指定文件读取 Bearer Token，适用于 Docker/Kubernetes Secret。
+    api_auth_token_file: Path | None = None
+    # 是否启用 Redis 固定窗口 API 限流。
+    api_rate_limit_enabled: bool = False
+    # 单个客户端在窗口内允许的请求数。
+    api_rate_limit_requests: int = Field(default=120, ge=1, le=100_000)
+    # API 限流窗口秒数。
+    api_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
+    # Redis 故障时是否继续放行请求。
+    api_rate_limit_fail_open: bool = True
+    # 就绪探针检查单个依赖的超时秒数。
+    health_dependency_timeout_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        le=30,
+    )
     # 启用的文献检索来源。
     literature_sources: list[
         Literal["openalex", "semantic_scholar"]
@@ -39,14 +55,19 @@ class AppSettings(BaseSettings):
     
     # OpenAlex API 密钥。
     openalex_api_key: str = ""
+    openalex_api_key_file: Path | None = None
     # PostgreSQL 异步连接地址。
     database_url: str = ""
+    database_url_file: Path | None = None
     # Redis 连接地址。
     redis_url: str = ""
+    redis_url_file: Path | None = None
     # RabbitMQ 连接地址。
     rabbitmq_url: str = ""
+    rabbitmq_url_file: Path | None = None
     # Semantic Scholar API 密钥。
     semantic_scholar_api_key: str = ""
+    semantic_scholar_api_key_file: Path | None = None
     # Semantic Scholar 熔断前允许的连续失败次数。
     semantic_scholar_circuit_failure_threshold: int = 1
     # Semantic Scholar 熔断恢复等待秒数。
@@ -54,6 +75,7 @@ class AppSettings(BaseSettings):
 
     # GitHub API Token。
     github_token: str = ""
+    github_token_file: Path | None = None
     # GitHub API 基础地址。
     github_api_url: str = "https://api.github.com"
     # GitHub REST API 版本。
@@ -63,6 +85,7 @@ class AppSettings(BaseSettings):
     
     # Qwen API 密钥。
     qwen_api_key: str = ""
+    qwen_api_key_file: Path | None = None
     # Qwen API 基础地址。
     qwen_base_url: str = ""
     # Qwen 模型名称。
@@ -72,6 +95,7 @@ class AppSettings(BaseSettings):
     
     # LangGraph checkpoint 数据库地址。
     langgraph_database_url: str = ""
+    langgraph_database_url_file: Path | None = None
     
     # 文献检索词规划器的实现模式。
     literature_query_planner: Literal["rule", "qwen"] = "rule"
@@ -88,6 +112,7 @@ class AppSettings(BaseSettings):
 
     # Jev 服务使用的 API 密钥。
     typesafe_api_key: str = ""
+    typesafe_api_key_file: Path | None = None
     # Jev 服务使用的模型名称。
     typesafe_model: str = "jev-latest"
     # 单次 Jev 调用超时时间，单位为秒。
@@ -189,6 +214,46 @@ class AppSettings(BaseSettings):
         le=86400,
     )
 
+    _SECRET_FILE_FIELDS: ClassVar[dict[str, str]] = {
+        "api_auth_token": "api_auth_token_file",
+        "openalex_api_key": "openalex_api_key_file",
+        "database_url": "database_url_file",
+        "redis_url": "redis_url_file",
+        "rabbitmq_url": "rabbitmq_url_file",
+        "semantic_scholar_api_key": "semantic_scholar_api_key_file",
+        "github_token": "github_token_file",
+        "qwen_api_key": "qwen_api_key_file",
+        "langgraph_database_url": "langgraph_database_url_file",
+        "typesafe_api_key": "typesafe_api_key_file",
+    }
+
+    @model_validator(mode="after")
+    def load_secret_files(self) -> Self:
+        """Read explicitly configured secrets without placing them in env values."""
+        for value_field, file_field in self._SECRET_FILE_FIELDS.items():
+            secret_path = getattr(self, file_field)
+            if secret_path is None:
+                continue
+            if str(getattr(self, value_field)).strip():
+                raise ValueError(
+                    f"configure only one of {value_field.upper()} and "
+                    f"{file_field.upper()}"
+                )
+            try:
+                if secret_path.stat().st_size > 65_536:
+                    raise ValueError(
+                        f"secret file is too large: {secret_path}"
+                    )
+                value = secret_path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise ValueError(
+                    f"cannot read secret file {secret_path}: {exc}"
+                ) from exc
+            if not value:
+                raise ValueError(f"secret file is empty: {secret_path}")
+            object.__setattr__(self, value_field, value)
+        return self
+
     @field_validator("literature_sources")
     @classmethod
     def reject_duplicate_literature_sources(
@@ -220,6 +285,7 @@ def validate_runtime_security(settings: AppSettings) -> None:
 
     required_urls = {
         "DATABASE_URL": settings.database_url,
+        "REDIS_URL": settings.redis_url,
         "RABBITMQ_URL": settings.rabbitmq_url,
         "LANGGRAPH_DATABASE_URL": settings.langgraph_database_url,
     }
@@ -271,6 +337,15 @@ def validate_runtime_security(settings: AppSettings) -> None:
     if len(settings.api_auth_token.strip()) < 32:
         raise RuntimeError(
             "API_AUTH_TOKEN must contain at least 32 characters in production"
+        )
+
+    if not settings.api_rate_limit_enabled:
+        raise RuntimeError(
+            "API_RATE_LIMIT_ENABLED must be true in production"
+        )
+    if settings.api_rate_limit_fail_open:
+        raise RuntimeError(
+            "API_RATE_LIMIT_FAIL_OPEN must be false in production"
         )
 
     if settings.validation_sandbox_image.endswith(":latest"):

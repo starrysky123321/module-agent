@@ -320,7 +320,7 @@ services:
         - CMD
         - python
         - -c
-        - import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/', timeout=2)
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/ready', timeout=2)
       interval: 5s
       timeout: 3s
       retries: 10
@@ -388,6 +388,7 @@ services:
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
       - module_agent_prometheus_data:/prometheus
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
@@ -396,6 +397,21 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      alertmanager:
+        condition: service_started
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
+    container_name: module-agent-alertmanager
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ${ALERTMANAGER_CONFIG_FILE:-./observability/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
+      - module_agent_alertmanager_data:/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
 
   grafana:
     image: grafana/grafana:12.2.1@sha256:35c41e0fd0295f5d0ee5db7e780cf33506abfaf47686196f825364889dee878b
@@ -447,3 +463,4 @@ volumes:
   module_agent_code_workspaces:
   module_agent_prometheus_data:
   module_agent_grafana_data:
+  module_agent_alertmanager_data:
