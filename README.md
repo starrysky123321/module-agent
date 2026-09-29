@@ -1,93 +1,137 @@
 # Module Agent
 
-一个面向计算机领域论文检索、代码获取或复现、隔离验证的多 Agent 工作流。
-系统使用 LangGraph 协调 Literature Agent、Code Agent、Validation Agent 和
-Supervisor Agent，并在论文选择阶段保留人工确认入口。
+Module Agent 是一个面向计算机科研场景的多 Agent 系统。
+
+用户提交研究方向、时间范围和论文质量要求后，系统会自动检索并筛选论文，提取论文
+解决的问题和核心方法；用户确认感兴趣的论文后，系统继续寻找可信代码仓库。若论文
+没有公开实现，则生成明确标记的复现计划和候选工程，最后由独立的 Validation Agent
+检查产物质量。
+
+这个项目希望把原本分散的“找论文 → 找代码 → 判断是否可信 → 验证能否使用”过程，
+组织成一条可以暂停、恢复和追踪的工作流。
+
+## 工作流程
+
+```mermaid
+flowchart LR
+    U[用户研究需求] --> L[Literature Agent]
+    L --> P[候选论文与方法画像]
+    P --> H{用户选择论文}
+    H --> C[Code Agent]
+    C -->|找到可信仓库| R[固定版本的代码仓库]
+    C -->|没有可信仓库| RP[复现计划与候选工程]
+    R --> V[Validation Agent]
+    RP --> V
+    V --> S[Supervisor 汇总结果]
+```
+
+工作流由 LangGraph 驱动。论文检索和代码处理通过 RabbitMQ 放到独立 worker 中运行，
+执行状态保存在 PostgreSQL。即使 API 或 worker 重启，任务也可以从 checkpoint 继续。
+
+## 四个 Agent 分别做什么
+
+| Agent | 主要职责 |
+|---|---|
+| Literature Agent | 规划检索词，聚合论文来源，去重、筛选、排序并提取方法画像 |
+| Code Agent | 从 GitHub、论文 PDF 和论文页面发现仓库，判断可信度并获取代码 |
+| Validation Agent | 对仓库或复现产物进行静态检查，以及显式授权的隔离验证 |
+| Supervisor Agent | 校验工作流状态，决定下一步、等待、重试或结束 |
+
+Agent 之间不直接传递数据库对象或 HTTP 对象，而是通过 Pydantic 领域模型和
+LangGraph 状态交换数据。这样每个 Agent 都可以独立测试和替换实现。
 
 ## 当前能力
 
-- 根据主题、时间、关键词、会议期刊与 CCF/ICORE 等级检索论文。
-- 聚合 OpenAlex 与 Semantic Scholar，统一元数据、去重、筛选和持久化。
-- 从 GitHub、论文 PDF、论文页面和补充材料发现代码仓库。
-- 无可信仓库时生成明确标记的候选复现实现。
-- 在默认静态、显式沙箱的安全策略下验证代码产物。
-- 通过 PostgreSQL、Redis、RabbitMQ 和 LangGraph checkpoint 支持异步执行、
-  暂停、恢复、重试、死信恢复与追踪。
-- 提供 Prometheus 指标和 Grafana dashboard。
-- 提供依赖就绪探针、Redis API 限流、审计日志、告警规则和安全运维演练工具。
+### 文献检索
 
-当前版本是单用户 MVP；多租户身份、任务归属和行级隔离尚未实现。
+- 接入 OpenAlex 和 Semantic Scholar；
+- 支持主题、关键词、排除词、时间范围和指定会议期刊；
+- 支持 CCF、ICORE 等会议期刊等级筛选；
+- 使用 DOI 和规范化标题进行跨来源去重；
+- 可使用 Qwen 扩展英文检索词、评估相关性并提取方法画像；
+- 单个来源失败时自动降级，保留其他来源的结果。
+
+### 代码发现与复现
+
+- 通过 GitHub 搜索、论文 PDF、论文页面和补充材料发现代码仓库；
+- 根据论文直链、DOI、标题、作者和关键词生成可解释的可信度评分；
+- 区分官方仓库、作者仓库、第三方实现以及证据不足的候选；
+- 安全浅克隆仓库并固定 commit SHA；
+- 分析依赖文件、入口、数据集、模型权重和可能的算法模块；
+- 没有可信仓库时生成复现计划和明确标记的候选工程。
+
+### 验证与工作流
+
+- 默认只进行静态检查，不自动执行第三方代码；
+- 可显式启用受 CPU、内存、网络和超时限制的 Docker 沙箱；
+- 在论文选择和异步任务处暂停，并从原 LangGraph checkpoint 恢复；
+- 保存 LiteratureRun、CodeRun、ValidationRun 和总工作流生命周期；
+- 支持超时、取消、有限重试和死信恢复；
+- 提供 Prometheus 指标、Grafana 面板和 Alertmanager 告警。
+
+## 技术架构
+
+项目采用模块化单体：代码在同一仓库中，但每项业务能力都有独立的领域模型、应用层
+和基础设施适配器。
+
+```text
+src/module_agent/
+├── literature/       论文检索、筛选、方法画像
+├── code/             仓库发现、可信度评分、复现产物
+├── validation/       静态检查和受控沙箱验证
+├── supervision/      Supervisor 决策与观察记录
+├── workflow/         LangGraph 总流程、暂停和恢复
+├── venue_catalog/    会议期刊及 CCF/ICORE 评级
+├── bootstrap/        依赖注入和对象组装
+├── shared/           数据库、消息、缓存和外部客户端
+├── api/              FastAPI 中间件、健康检查和异常处理
+└── cli/              Worker 与运维命令入口
+```
+
+主要技术：
+
+- FastAPI、Pydantic v2、SQLAlchemy 2、Alembic
+- LangGraph、Qwen、可选 Jev 策略
+- PostgreSQL、RabbitMQ、Redis
+- GitHub REST API、OpenAlex、Semantic Scholar
+- Docker、Prometheus、Grafana、Alertmanager
+- uv、pytest、Ruff、basedpyright、GitHub Actions
 
 ## 快速启动
 
-需要安装 Docker、Docker Compose 和 [uv](https://docs.astral.sh/uv/)。
+需要安装 Docker、Docker Compose 和
+[uv](https://docs.astral.sh/uv/)。
 
 ```bash
+git clone https://github.com/starrysky123321/module-agent.git
+cd module-agent
+
 cp .env.example .env
 uv sync
 docker compose up -d --build
 ```
 
-服务启动后：
-
-- API：<http://localhost:8000>
-- OpenAPI：<http://localhost:8000/docs>
-- Prometheus：<http://localhost:9090>
-- Grafana：<http://localhost:3000>
-- RabbitMQ 管理页：<http://localhost:15672>
-- Alertmanager：<http://localhost:9093>
-
-外部模型或数据源需要在本地 `.env` 中填写对应密钥；`.env` 不会提交到 Git。
-Compose 暴露的开发端口默认只绑定到 `127.0.0.1`。
-
-## 验证
+检查服务：
 
 ```bash
-uv run pytest -q
-uv run pytest -q --cov=module_agent --cov-fail-under=80
-uv run ruff check src tests
-uv run basedpyright src --level error
-uv run alembic check
-docker compose config --quiet
+docker compose ps
+curl http://127.0.0.1:8000/api/health/ready
 ```
 
-## 生产运行与演练
+常用入口：
 
-存活探针 `/api/health/` 只判断 API 进程是否存活；就绪探针
-`/api/health/ready` 会并行检查 PostgreSQL、Redis 和 RabbitMQ。Compose
-使用就绪探针判断 API 容器是否能接收真实任务。
+- OpenAPI：<http://127.0.0.1:8000/docs>
+- RabbitMQ：<http://127.0.0.1:15672>
+- Prometheus：<http://127.0.0.1:9090>
+- Grafana：<http://127.0.0.1:3000>
 
-生产环境必须配置长度至少 32 位的 `API_AUTH_TOKEN`，并设置：
+OpenAlex、Semantic Scholar、GitHub、Qwen 和 Jev 等外部能力通过 `.env` 配置。
+没有配置某项可选能力时，系统会使用规则实现或关闭相应功能。
 
-```dotenv
-APP_ENV=production
-API_RATE_LIMIT_ENABLED=true
-API_RATE_LIMIT_FAIL_OPEN=false
-API_RATE_LIMIT_REQUESTS=120
-API_RATE_LIMIT_WINDOW_SECONDS=60
-```
+## 跑一次完整流程
 
-敏感值也可以通过 `*_FILE` 从只读秘密文件加载。例如，将本地秘密目录挂载到
-容器的 `/run/secrets` 后，设置
-`API_AUTH_TOKEN_FILE=/run/secrets/api_auth_token`。数据库、Redis、RabbitMQ、
-LangGraph、Qwen、GitHub、Semantic Scholar、OpenAlex 和 Typesafe 的对应配置
-同样支持 `_FILE` 后缀。不要同时设置同一个秘密的直接值和文件值。
-
-小规模压力测试和长时间连续运行使用同一个只读 GET 工具：
-
-```bash
-# 1000 次请求，20 并发
-uv run python -m module_agent.cli.run_api_load_test \
-  --requests 1000 --concurrency 20
-
-# 连续运行 30 分钟；请先在非生产环境确认目标路径
-uv run python -m module_agent.cli.run_api_load_test \
-  --duration-seconds 1800 --concurrency 10 \
-  --path /api/health/ready
-```
-
-报告包含吞吐、错误率、p95 和最大耗时；超过阈值时命令返回非零退出码。
-发布前可以通过公开 API 跑一次静态验证的完整 Agent 流程：
+项目提供了完整 API 验收命令。它会创建文献任务、等待检索、选择排名靠前的论文、
+运行 Code Agent 和静态 Validation，最后输出每个阶段的耗时和最终结果。
 
 ```bash
 uv run python -m module_agent.cli.run_release_acceptance \
@@ -97,61 +141,35 @@ uv run python -m module_agent.cli.run_release_acceptance \
   --paper-count 1
 ```
 
-该命令会自动选择排名靠前的论文，但不会启用依赖安装或项目实验。默认总超时
-为 1800 秒，输出包含每个阶段的耗时、Run ID、最终结果或明确的失败阶段。
+这条验收命令不会安装论文依赖，也不会运行论文实验。需要手动控制论文选择或验证策略
+时，可以直接使用 OpenAPI 页面调用 `/api/literature`、`/api/workflow`、
+`/api/code` 和 `/api/validation` 接口。
 
-如需验证容器进程被强制终止后的恢复能力，明确确认后执行：
+## 质量与安全边界
 
-```bash
-scripts/service_recovery_drill.sh api --confirm
-```
+- 生产环境支持 Bearer Token、Redis 限流、审计日志和文件式 Secret；
+- 应用容器使用非 root 用户和只读根文件系统；
+- PDF 下载限制地址、重定向、大小、页数、解析时间和内存；
+- Code Workspace 与沙箱路径都进行越界检查；
+- RabbitMQ 使用持久化 Quorum Queue，完成事件支持有界重放；
+- PostgreSQL 重启后 completion worker 可以重建 LangGraph 连接池；
+- 当前自动化回归为 1100+ tests，覆盖率保持在 85% 以上。
 
-Compose 启动时，`workspace-init` 会把持久化 Code Workspace volume 修正为应用
-用户 `10001:10001` 可写。Completion worker 在 PostgreSQL 连接中断后会重建
-LangGraph checkpointer 并重试当前事件，无需人工重启 worker。
-
-Literature/Code completion 死信由 `completion-recovery-worker` 延迟重放；默认每
-30 秒重放一次，最多 3 次。超过上限或内容无效的消息不会丢弃，而是保留在
-`literature.completed.parked.v1` 或 `code.completed.parked.v1`。可通过以下变量
-调整边界：
-
-```dotenv
-COMPLETION_DEAD_LETTER_REPLAY_LIMIT=3
-COMPLETION_DEAD_LETTER_RETRY_DELAY_MS=30000
-```
-
-数据库备份和恢复演练：
+运行本地检查：
 
 ```bash
-scripts/backup_postgres.sh
-scripts/restore_postgres_drill.sh backups/module-agent-YYYYMMDDTHHMMSSZ.dump
+uv run pytest -q --cov=module_agent --cov-fail-under=80
+uv run ruff check src tests
+uv run basedpyright src --level error
+uv run alembic check
+docker compose config --quiet
 ```
 
-恢复脚本拒绝覆盖主库，只允许恢复到名称以 `_restore_drill` 结尾的独立数据库。
-请定期在隔离环境执行演练并检查业务表、Alembic 版本和关键记录。
+## 当前边界
 
-Prometheus 默认加载可用性、5xx、p95 延迟、死信队列和通知失败告警。
-默认 Alertmanager 只在本机 UI 展示告警。启用外部通知时：
+当前版本定位为单用户 MVP，暂未实现多租户身份、任务归属和行级数据隔离。系统生成的
+复现代码属于需要继续验证的候选产物，不会冒充论文官方实现。官方仓库识别、检索质量
+和复现完整度还需要通过更多真实研究任务持续评估。
 
-```bash
-cp observability/alertmanager.webhook.example.yml \
-  observability/alertmanager.local.yml
-chmod 600 observability/alertmanager.local.yml
-# 编辑本地文件中的通知网关，再在 .env 设置：
-# ALERTMANAGER_CONFIG_FILE=./observability/alertmanager.local.yml
-docker compose up -d alertmanager prometheus
-```
-
-`alertmanager.local.yml` 已被 Git 忽略，通知凭据不会进入仓库。
-
-GPU Worker 需要 NVIDIA Container Toolkit，并通过 profile 单独启动：
-
-```bash
-docker compose --profile gpu up -d code-gpu-worker
-```
-
-## 安全边界
-
-仓库发现阶段不会安装依赖或执行第三方代码。依赖安装与项目测试必须由调用方
-显式开启，并且只能在设置了时间、CPU、内存和网络限制的隔离沙箱中运行。
-生产部署前请替换所有开发密码、启用 HTTPS，并使用专用密钥管理服务。
+如果把项目继续向产品方向推进，下一阶段会重点建立真实论文评测集，量化文献
+Precision/Recall、官方仓库识别准确率、验证拦截率、端到端时延和模型成本。
