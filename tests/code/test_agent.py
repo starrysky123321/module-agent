@@ -22,6 +22,7 @@ from module_agent.code.domain.repository import (
     RepositoryOrigin,
 )
 from module_agent.code.domain.request import CodeAgentRequest, CodePaperInput
+from module_agent.shared.llm.call import observed_model_call
 
 
 class FakeSearcher:
@@ -32,6 +33,30 @@ class FakeSearcher:
         limit: int = 10,
     ) -> list[RepositoryCandidate]:
         return []
+
+
+def test_parallel_papers_have_bounded_concurrency_and_isolated_model_metrics(monkeypatch):
+    active=0
+    maximum=0
+    async def process(request,paper):
+        nonlocal active,maximum
+        active+=1
+        maximum=max(maximum,active)
+        try:
+            async with observed_model_call(stage=f"fixture_{paper.paper_id}",model="fixture",timeout_seconds=1):
+                await asyncio.sleep(.01)
+            return CodeArtifact(paper_id=paper.paper_id,origin=CodeArtifactOrigin.UNKNOWN,status=CodeArtifactStatus.FAILED,error="Synthetic fixture only")
+        finally:
+            active-=1
+    agent=build_agent(max_concurrent_papers=2)
+    monkeypatch.setattr(agent,"_process_paper",process)
+    papers=[CodePaperInput(paper_id=i,source="fixture",source_id=str(i),title="Fixture") for i in range(1,7)]
+    artifacts=asyncio.run(agent.run(CodeAgentRequest(literature_run_id=1,papers=papers)))
+    assert maximum==2
+    assert [a.paper_id for a in artifacts]==list(range(1,7))
+    for artifact in artifacts:
+        assert len(artifact.llm_metrics)==1
+        assert artifact.llm_metrics[0].stage==f"fixture_{artifact.paper_id}"
 
 
 class FakeFetcher:
@@ -485,6 +510,7 @@ def test_run_processes_papers_concurrently_and_isolates_failure(
         code_requirements="Use PyTorch",
     )
     agent = build_agent()
+    agent.max_concurrent_papers = 3  # 显式验证可配置并发，默认上限另有覆盖。
     all_started = asyncio.Event()
     release = asyncio.Event()
     started: list[int] = []

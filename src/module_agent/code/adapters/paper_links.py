@@ -1,6 +1,7 @@
 from typing import Any
 
 import httpx
+from bs4 import BeautifulSoup
 
 from module_agent.code.adapters.pdf_repository import (
     download_text,
@@ -35,9 +36,7 @@ class PaperLinkRepositorySearcher:
     ) -> list[tuple[dict[str, Any], str]]:
         """返回仓库元数据及提供该链接的论文页面。"""
         if not 1 <= limit <= 100:
-            raise ValueError(
-                "Paper link search limit must be between 1 and 100"
-            )
+            raise ValueError("Paper link search limit must be between 1 and 100")
 
         source_urls = list(
             dict.fromkeys(
@@ -63,7 +62,7 @@ class PaperLinkRepositorySearcher:
             )
             discovered.extend(
                 (repository_url, source_url)
-                for repository_url in extract_github_links(text)[
+                for repository_url in extract_article_github_links(text)[
                     : limit - len(discovered)
                 ]
             )
@@ -84,3 +83,13 @@ class PaperLinkRepositorySearcher:
             if len(result) >= limit:
                 break
         return result
+
+
+def extract_article_github_links(text: str) -> list[str]:
+    """排除网站导航、页脚和脚本中的通用链接，仅保留文章候选。"""
+    soup = BeautifulSoup(text, "html.parser")
+    for element in soup.select(
+        'nav, footer, aside, script, style, template, [role="navigation"], [role="contentinfo"]'
+    ):
+        element.decompose()
+    return extract_github_links(str(soup))

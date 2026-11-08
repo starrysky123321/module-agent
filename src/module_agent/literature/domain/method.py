@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal, Protocol
+import json
 
 from pydantic import BaseModel, Field
 from module_agent.literature.domain.llm_metric import LlmCallMetric
@@ -45,6 +46,34 @@ class PaperMethodProfile(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class PaperMethodExtractionError(ValueError):
+    """An application-generated reason, safe to record without raw responses."""
+
+    def __init__(self, code: str, message: str, *, evidence_field: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.evidence_field = evidence_field
+
+
+class PaperMethodExtractionIssue(BaseModel):
+    """One failed or ignored profile, separate from model-authored claims."""
+
+    source: str | None = None
+    source_id: str | None = None
+    code: str
+    message: str
+    error_type: str = "PaperMethodExtractionError"
+    evidence_field: str | None = None
+    # True means this input paper received an unknown profile; False is ignored extra output.
+    fallback: bool = True
+
+    def as_warning(self) -> str:
+        """Serialize a bounded identity and safe diagnostic into existing run warnings."""
+        identity = json.dumps({"source": self.source, "source_id": self.source_id}, ensure_ascii=False)
+        action = "unknown profile was used" if self.fallback else "unexpected profile was ignored"
+        return f"Paper method extraction failed ({self.error_type}) {identity} [{self.code}]: {self.message}; {action}"
+
+
 class PaperMethodExtractionResult(BaseModel):
     """表示一次处理结果。"""
     # 论文方法画像列表。
@@ -53,6 +82,8 @@ class PaperMethodExtractionResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     # 各阶段模型调用指标。
     llm_metrics: list[LlmCallMetric] = Field(default_factory=list)
+    # Application-generated diagnostics; also mirrored to persisted warnings.
+    issues: list[PaperMethodExtractionIssue] = Field(default_factory=list)
 
 
 class PaperMethodExtractor(Protocol):

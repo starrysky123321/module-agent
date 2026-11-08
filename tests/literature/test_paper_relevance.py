@@ -32,6 +32,14 @@ def test_tokenize_normalizes_and_filters_stop_words() -> None:
     }
 
 
+def test_original_named_method_is_not_overridden_by_generated_query_terms() -> None:
+    request=SearchRequest(topic="DropEdge 图神经网络节点分类",description="寻找原始算法",keywords=["DropEdge"],start_date=date(2019,1,1),end_date=date(2021,12,31),max_results=3)
+    original=PaperSearchResult(source="fixture",source_id="1",title="DropEdge: Towards Deep Graph Convolutional Networks on Node Classification")
+    adjacent=PaperSearchResult(source="fixture",source_id="2",title="Towards Deepening Graph Neural Networks",abstract="Related work includes DropEdge")
+    result=asyncio.run(RuleBasedPaperRelevanceScorer().score_many(request,["DropEdge Towards Deepening Graph Neural Networks"],[original,adjacent]))
+    assert result.assessments[0].score>result.assessments[1].score
+
+
 def test_tokenize_removes_punctuation_and_duplicates() -> None:
     assert _tokenize("YOLO-based YOLO: Version 11!") == {
         "yolo",

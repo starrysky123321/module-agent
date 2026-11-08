@@ -70,4 +70,4 @@ class CodeWorker:
                     )
                 )
                 return
-            QUEUE_JOBS.labels(queue=queue_name, outcome="completed").inc()
+            QUEUE_JOBS.labels(queue=queue_name, outcome="cancelled" if run.status is CodeRunStatus.CANCELLED else "completed").inc()

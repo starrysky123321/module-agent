@@ -2,6 +2,7 @@ from module_agent.code.domain.artifact import CodeArtifact
 from module_agent.code.domain.request import CodePaperInput
 from module_agent.supervision.domain import WorkflowFailure
 from module_agent.validation.domain import ValidationReport
+from module_agent.validation.domain.request import ValidationPolicy
 from module_agent.workflow.domain import (
     SupervisorStep,
     WorkflowStatus,
@@ -23,6 +24,8 @@ class ModuleBuildResult(BaseModel):
     trace_id: UUID | None = None
     # 当前处理状态。
     status: WorkflowStatus
+    # 从 checkpoint 读取的实际执行策略与资源预算；旧任务可能没有。
+    validation_policy: ValidationPolicy | None = None
 
     # 用户选中的论文 ID。
     selected_paper_ids: list[int] = Field(default_factory=list)

@@ -3,6 +3,10 @@ from module_agent.literature.application.run import LiteratureRunService
 from module_agent.literature.application.agent import LiteratureAgent
 from module_agent.literature.domain.recommendation import LiteratureRunPaper
 from module_agent.literature.domain.run import LiteratureRun
+from module_agent.shared.redaction import redact_sensitive_text
+from module_agent.shared.execution_control import ExecutionStopped, run_with_control
+from collections.abc import Awaitable, Callable
+from module_agent.literature.domain.run import LiteratureRunStatus
 
 
 
@@ -12,10 +16,13 @@ class LiteratureRunExecutor:
         self,
         agent: LiteratureAgent,
         run_service: LiteratureRunService,
+        *,
+        execution_control: Callable[[int], Awaitable[bool]] | None = None,
     ) -> None:
         """初始化当前对象。"""
         self.agent = agent
         self.run_service = run_service
+        self.execution_control = execution_control
 
     async def start(self, run_id: int) -> LiteratureRun:
         """启动当前流程。"""
@@ -37,7 +44,8 @@ class LiteratureRunExecutor:
 
         try:
             request = run.request
-            literature_bundle = await self.agent.run(request)
+            control = self.execution_control
+            literature_bundle = await run_with_control(lambda:self.agent.run(request), (lambda:control(run_id)) if control is not None else None)
             
             profiles_by_identity = {
                 (profile.source, profile.source_id): profile
@@ -75,6 +83,7 @@ class LiteratureRunExecutor:
                         relevance_score=assessment.score,
                         relevance_reason=assessment.reason,
                         matched_terms=assessment.matched_terms,
+                        integrity=selected.integrity,
                         method_profile=profiles_by_identity.get(
                             (selected.source, selected.source_id)
                         ),
@@ -89,8 +98,13 @@ class LiteratureRunExecutor:
                 source_metrics=literature_bundle.source_metrics,
                 llm_metrics=literature_bundle.llm_metrics,
             )
+        except ExecutionStopped:
+            current = await self.run_service.get_run(run_id)
+            if current.status is not LiteratureRunStatus.CANCELLED:
+                await self.run_service.cancel_run(run_id)
+            raise
         except Exception as exc:
-            error_message = str(exc).strip() or type(exc).__name__
+            error_message = redact_sensitive_text(str(exc).strip() or type(exc).__name__)
             await self.run_service.fail_run(run_id, error_message)
             raise
         

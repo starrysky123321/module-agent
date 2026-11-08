@@ -11,6 +11,7 @@ from module_agent.literature.adapters.database.models.run import (
 from module_agent.literature.domain.method import PaperMethodProfile
 from module_agent.literature.domain.search import SourceSearchMetric
 from module_agent.literature.domain.llm_metric import LlmCallMetric
+from module_agent.literature.domain.integrity import PaperIntegrity
 
 
 class SqlAlchemyLiteratureRunRepository:
@@ -73,6 +74,7 @@ class SqlAlchemyLiteratureRunRepository:
                     relevance_reason=paper.relevance_reason,
                     matched_terms=list(paper.matched_terms),
                     method_profile=paper.method_profile.model_dump(mode="json") if paper.method_profile is not None else None,
+                    integrity=paper.integrity.model_dump(mode="json") if paper.integrity is not None else None,
                 )
                 for paper in papers
             ]
@@ -95,6 +97,7 @@ class SqlAlchemyLiteratureRunRepository:
                 relevance_reason=model.relevance_reason,
                 matched_terms=list(model.matched_terms),
                 method_profile=PaperMethodProfile.model_validate(model.method_profile) if model.method_profile is not None else None,
+                integrity=PaperIntegrity.model_validate(model.integrity) if model.integrity is not None else None,
             )
             for model in result.scalars().all()
         ]

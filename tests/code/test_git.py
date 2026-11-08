@@ -108,6 +108,30 @@ def test_git_runner_kills_process_after_timeout() -> None:
         )
 
 
+def test_git_runner_kills_process_when_workspace_guard_cancels(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        created = asyncio.Event()
+        process = None
+        original = asyncio.create_subprocess_exec
+
+        async def spawn(*args, **kwargs):
+            nonlocal process
+            process = await original(*args, **kwargs)
+            created.set()
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+        fetcher = GitRepositoryFetcher(git_executable=sys.executable)
+        task = asyncio.create_task(fetcher._run_git("-c", "import time; time.sleep(100)"))
+        await created.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert process is not None and process.returncode is not None
+
+    asyncio.run(run())
+
+
 def test_fetch_validation_returns_resolved_absolute_destination(
     tmp_path: Path,
 ) -> None:

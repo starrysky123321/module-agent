@@ -24,6 +24,8 @@ from module_agent.literature.domain.ranking import (
     PaperRelevanceScorer,
 )
 from module_agent.literature.application.deduplication import deduplicate_papers
+from module_agent.literature.application.integrity import PaperIntegrityService
+from module_agent.literature.domain.integrity import merge_integrity, title_integrity
 class LiteratureAgent:
     """协调该 Agent 的业务流程。"""
     def __init__(
@@ -34,6 +36,7 @@ class LiteratureAgent:
         relevance_scorer: PaperRelevanceScorer,
         paper_catalog_service: PaperCatalogService | None = None,
         method_extractor: PaperMethodExtractor | None = None,
+        integrity_service: PaperIntegrityService | None = None,
     ) -> None:
         """初始化当前对象。"""
         self.search_service = search_service
@@ -42,6 +45,7 @@ class LiteratureAgent:
         self.relevance_scorer = relevance_scorer
         self.paper_catalog_service = paper_catalog_service
         self.method_extractor = method_extractor
+        self.integrity_service = integrity_service
         self.graph = self._build_graph()
         
     def _build_graph(self):
@@ -53,16 +57,30 @@ class LiteratureAgent:
         builder.add_node("select_papers", self._select_papers_node)
         builder.add_node("persist_papers", self._persist_papers_node)
         builder.add_node("extract_method", self._extract_method)
+        builder.add_node("check_integrity", self._check_integrity_node)
         
         builder.add_edge(START, "plan_queries")
         builder.add_edge("plan_queries", "search")
         builder.add_edge("search", "deduplicate")
         builder.add_edge("deduplicate", "select_papers")
-        builder.add_edge("select_papers", "extract_method")
+        builder.add_edge("select_papers", "check_integrity")
+        builder.add_edge("check_integrity", "extract_method")
         builder.add_edge("extract_method", "persist_papers")
         builder.add_edge("persist_papers", END)
 
         return builder.compile()
+
+    async def _check_integrity_node(self, state: LiteratureAgentState) -> dict[str, Any]:
+        papers = [PaperSearchResult.model_validate(paper) for paper in state.get("selected_papers", [])]
+        warnings = list(state.get("warnings", []))
+        request = SearchRequest.model_validate(state["request"])
+        if self.integrity_service is not None:
+            papers, new_warnings = await self.integrity_service.check_many(papers, result_limit=request.max_results)
+            warnings.extend(new_warnings)
+        return {
+            "selected_papers":[paper.model_dump(mode="json") for paper in papers[:request.max_results]],
+            "warnings":list(dict.fromkeys(warnings)),
+        }
     
     
     async def _extract_method(self, state: LiteratureAgentState) -> dict[str, Any]:
@@ -105,8 +123,13 @@ class LiteratureAgent:
         
         
         eligible_papers: list[PaperSearchResult] = []
+        warnings = list(state.get("warnings", []))
         
         for paper in papers:
+            integrity = merge_integrity(paper.integrity, title_integrity(paper.title, paper.source))
+            if integrity.blocked:
+                warnings.append(f"已排除撤稿论文或撤稿声明：{paper.title[:160]}")
+                continue
             if normalized_venues:
                 if paper.venue is None:
                     continue
@@ -135,7 +158,7 @@ class LiteratureAgent:
             eligible_papers.append(paper)
         
         if not eligible_papers:
-            return {"selected_papers": []}
+            return {"selected_papers": [], "warnings":list(dict.fromkeys(warnings))}
         
         relevance_result = await self.relevance_scorer.score_many(
             request=request,
@@ -163,9 +186,9 @@ class LiteratureAgent:
             reverse=True,
         )
         
-        selected_papers = selected_papers[:request.max_results]
+        # 预留两个替补，核验排除撤稿后仍有机会满足用户的上限数量。
+        selected_papers = selected_papers[:request.max_results + (2 if self.integrity_service else 0)]
         
-        warnings = list(state.get("warnings", []))
         warnings.extend(relevance_result.warnings)
 
         return {

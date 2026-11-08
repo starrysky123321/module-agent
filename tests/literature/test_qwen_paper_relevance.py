@@ -178,3 +178,12 @@ def test_qwen_relevance_scorer_rejects_missing_assessment() -> None:
 
     with pytest.raises(ValueError, match="does not match input papers"):
         asyncio.run(scorer.score_many(search_request(), [], [paper()]))
+
+
+def test_valid_model_scores_survive_when_other_papers_are_missing() -> None:
+    kept=PaperRelevanceAssessment(source="openalex",source_id="W123",score=.91,reason="有效的模型评分")
+    client,_=qwen_client_with_parsed_result(PaperRelevanceResult(assessments=[kept]))
+    result=asyncio.run(QwenPaperRelevanceScorer(client,"fixture").score_many(search_request(),[],[paper("W123"),paper("W124")]))
+    assert result.assessments[0]==kept
+    assert result.assessments[1].source_id=="W124"
+    assert result.used_rule_fallback and result.warnings

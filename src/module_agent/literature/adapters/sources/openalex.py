@@ -7,6 +7,12 @@ from module_agent.literature.adapters.sources.http_client import (
 from module_agent.shared.config import app_settings
 from module_agent.literature.domain.search import PaperSearchResult, SearchRequest
 from module_agent.literature.domain.normalization import normalize_doi
+from module_agent.literature.domain.integrity import (
+    PaperIntegrity,
+    PaperIntegrityStatus,
+    merge_integrity,
+    title_integrity,
+)
 
 
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
@@ -24,6 +30,7 @@ OPENALEX_FIELDS = ",".join(
         "open_access",
         "abstract_inverted_index",
         "cited_by_count",
+        "is_retracted",
     ]
 )
 
@@ -53,11 +60,25 @@ def parse_work(work: dict[str, Any]) -> PaperSearchResult:
     best_oa_location = work.get("best_oa_location") or {}
     venue_source = primary_location.get("source") or {}
     open_access = work.get("open_access") or {}
+    title = work.get("title") or "Untitled"
+    flag = work.get("is_retracted")
+    source_fact = (
+        PaperIntegrity(
+            status=PaperIntegrityStatus.RETRACTED
+            if flag
+            else PaperIntegrityStatus.NOT_FLAGGED,
+            sources=["openalex"],
+            evidence=[f"OpenAlex is_retracted={flag}"],
+        )
+        if isinstance(flag, bool)
+        else None
+    )
+    title_fact = title_integrity(title, "openalex")
 
     return PaperSearchResult(
         source="openalex",
         source_id=work["id"],
-        title=work.get("title") or "Untitled",
+        title=title,
         authors=authors,
         publication_year=work.get("publication_year"),
         publication_date=work.get("publication_date"),
@@ -69,12 +90,13 @@ def parse_work(work: dict[str, Any]) -> PaperSearchResult:
             primary_location.get("landing_page_url")
             or best_oa_location.get("landing_page_url")
         ),
-        pdf_url=(
-            best_oa_location.get("pdf_url") or primary_location.get("pdf_url")
-        ),
+        pdf_url=(best_oa_location.get("pdf_url") or primary_location.get("pdf_url")),
         is_open_access=open_access.get("is_oa", False),
         open_access_status=open_access.get("oa_status"),
         cited_by_count=work.get("cited_by_count", 0),
+        integrity=merge_integrity(source_fact, title_fact)
+        if source_fact or title_fact
+        else None,
     )
 
 

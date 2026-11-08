@@ -37,9 +37,12 @@ from module_agent.bootstrap.factories.validation_agent import (
     build_validation_agent,
 )
 from module_agent.validation.domain import ValidationReport, ValidationStatus
+from module_agent.validation.domain.request import ValidationPolicy
+from module_agent.workflow.lifecycle import ModuleWorkflowRunRepository, ModuleWorkflowRunStatus
+from module_agent.workflow.lifecycle_service import ModuleWorkflowLifecycleService
 
 
-def _service_with_dispatcher() -> tuple[ModuleWorkflowService, AsyncMock]:
+def _service_with_dispatcher(lifecycle_service=None) -> tuple[ModuleWorkflowService, AsyncMock]:
     dispatcher = AsyncMock(spec=LiteratureRunDispatcher)
     dispatcher.dispatch.return_value = "message-7"
     code_input_loader = AsyncMock(spec=SelectedPaperCodeInputLoader)
@@ -84,13 +87,72 @@ def _service_with_dispatcher() -> tuple[ModuleWorkflowService, AsyncMock]:
             workspace_root=Path.cwd()
         ),
         checkpointer=InMemorySaver(),
+        lifecycle_service=lifecycle_service,
     ).build()
-    return ModuleWorkflowService(graph), dispatcher
+    return ModuleWorkflowService(graph, lifecycle_service), dispatcher
 
 
 def _service() -> ModuleWorkflowService:
     service, _ = _service_with_dispatcher()
     return service
+
+
+def test_confirming_after_days_of_human_wait_resumes_clock_before_graph_nodes(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from module_agent.workflow import lifecycle_service as lifecycle_module
+    from module_agent.workflow.lifecycle import ModuleWorkflowRun
+
+    clock = [datetime(2026, 11, 2, 8, 0, tzinfo=timezone.utc)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+
+    monkeypatch.setattr(lifecycle_module, "datetime", Clock)
+    stored = [None]
+    repository = AsyncMock(spec=ModuleWorkflowRunRepository)
+
+    async def get(_):
+        return stored[0]
+
+    async def save(run):
+        stored[0] = ModuleWorkflowRun.model_validate(run.model_dump(mode="json"))
+        return stored[0]
+
+    repository.get.side_effect = get
+    repository.save.side_effect = save
+    lifecycle = ModuleWorkflowLifecycleService(repository, default_timeout_seconds=3600)
+    service, _ = _service_with_dispatcher(lifecycle)
+
+    async def verify():
+        await service.start_paper_selection(7)
+        clock[0] += timedelta(days=3)
+        restarted = ModuleWorkflowService(service.graph, ModuleWorkflowLifecycleService(repository, default_timeout_seconds=3600))
+        assert (await restarted.get_lifecycle(7)).status is ModuleWorkflowRunStatus.WAITING_FOR_SELECTION
+        result = await restarted.resume_paper_selection(7, PaperSelectionRequest(selected_paper_ids=[51]))
+        assert result["status"] == "completed"
+        assert stored[0].selection_wait_started_at is None
+        assert stored[0].deadline_at - clock[0] == timedelta(seconds=3600)
+
+    asyncio.run(verify())
+    statuses = [call.args[0].status for call in repository.save.await_args_list]
+    assert statuses == [ModuleWorkflowRunStatus.RUNNING, ModuleWorkflowRunStatus.WAITING_FOR_SELECTION, ModuleWorkflowRunStatus.RUNNING, ModuleWorkflowRunStatus.COMPLETED]
+
+
+def test_resource_budget_survives_service_recreation_and_final_result() -> None:
+    service = _service()
+    policy = ValidationPolicy(cpu_limit=1.5, memory_limit_mb=768, workspace_limit_mb=128, temporary_storage_mb=128)
+
+    async def run():
+        await service.start_paper_selection(7, validation_policy=policy)
+        restored = ModuleWorkflowService(service.graph)
+        assert await restored.get_resource_policy(7) == policy
+        await restored.resume_paper_selection(7, PaperSelectionRequest(selected_paper_ids=[51]))
+        result = await restored.get_result(7)
+        assert result.validation_policy == policy
+
+    asyncio.run(run())
 
 
 def test_service_starts_literature_workflow_and_dispatches_once() -> None:

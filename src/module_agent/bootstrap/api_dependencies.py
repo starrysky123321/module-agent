@@ -24,6 +24,11 @@ from module_agent.literature.adapters.database.repositories.code_status import (
 )
 from module_agent.literature.application.catalog import PaperCatalogService
 from module_agent.literature.adapters.database.repositories.run import SqlAlchemyLiteratureRunRepository
+from module_agent.literature.adapters.database.repositories.transactional import (
+    TransactionalLiteratureRunRepository,
+    TransactionalPaperRepository,
+    TransactionalPaperSelectionRepository,
+)
 from module_agent.literature.application.run import LiteratureRunService
 from module_agent.literature.domain.repositories.run import LiteratureRunRepository
 from module_agent.literature.application.execution import LiteratureRunExecutor
@@ -39,6 +44,7 @@ from module_agent.literature.adapters.sources.registry import LITERATURE_SOURCE_
 from module_agent.literature.application.result import LiteratureResultService
 from module_agent.literature.domain.query import LiteratureQueryPlanner
 from module_agent.literature.domain.source import LiteratureSource
+from module_agent.bootstrap.factories.integrity import build_paper_integrity_service
 
 from module_agent.shared.llm.qwen_client import qwen_client_manager
 from module_agent.bootstrap.factories.query_planner import build_literature_query_planner
@@ -70,6 +76,8 @@ from module_agent.supervision.application.agent import SupervisorAgent
 from langgraph.graph.state import CompiledStateGraph
 from module_agent.workflow.graph import ModuleBuildWorkflow
 from module_agent.workflow.service import ModuleWorkflowService
+from module_agent.workflow.deletion import TaskDeletionService
+from module_agent.workflow.adapters.database.deletion import SqlAlchemyTaskDeletionRepository
 from module_agent.workflow.coordinator import (
     ModuleWorkflowCoordinator,
 )
@@ -79,6 +87,7 @@ from module_agent.workflow.adapters.database.repository import (
 from module_agent.workflow.lifecycle_service import (
     ModuleWorkflowLifecycleService,
 )
+from module_agent.workflow.adapters.execution_control import WorkflowExecutionControl
 from module_agent.workflow.adapters.database.node_execution import (
     SqlAlchemyWorkflowNodeExecutionRepository,
 )
@@ -203,6 +212,7 @@ def get_literature_agent(
         relevance_scorer=relevance_scorer,
         paper_catalog_service=paper_catalog_service,
         method_extractor=method_extractor,
+        integrity_service=build_paper_integrity_service(),
     )
 
 
@@ -293,6 +303,18 @@ def get_langgraph_checkpointer() -> AsyncPostgresSaver:
     return postgres_checkpointer_manager.get_checkpointer()
 
 
+def get_task_deletion_service() -> TaskDeletionService:
+    """Keep deletion independent from expensive agent/model construction."""
+    async def delete_checkpoint(thread_id: str) -> None:
+        await postgres_checkpointer_manager.run_with_recovery(
+            lambda saver: saver.adelete_thread(thread_id)
+        )
+
+    return TaskDeletionService(
+        SqlAlchemyTaskDeletionRepository(async_session_factory), delete_checkpoint
+    )
+
+
 
 def get_code_agent() -> CodeAgent:
     """获取对应记录。"""
@@ -302,6 +324,7 @@ def get_code_agent() -> CodeAgent:
         github_api_version=app_settings.github_api_version,
         qwen_client_manager=qwen_client_manager,
         qwen_model=app_settings.qwen_model,
+        llm_timeout_seconds=app_settings.qwen_call_timeout_seconds,
         workspace_root=app_settings.code_workspace_root,
         git_timeout_seconds=app_settings.git_clone_timeout_seconds,
         confidence_threshold=(
@@ -371,6 +394,7 @@ def get_code_run_service(
         agent,
         repository,
         SqlAlchemyPaperCodeStatusWriter(async_session_factory),
+        execution_control=WorkflowExecutionControl(ModuleWorkflowLifecycleService(TransactionalModuleWorkflowRunRepository(async_session_factory),default_timeout_seconds=app_settings.workflow_timeout_seconds)),
     )
 
 
@@ -465,10 +489,39 @@ def get_workflow_node_execution_repository(
         async_session_factory
     )
 
+def get_workflow_literature_run_service() -> LiteratureRunService:
+    """Use short transactions instead of the HTTP request's transaction."""
+    return LiteratureRunService(TransactionalLiteratureRunRepository(async_session_factory))
+
+
+def get_workflow_literature_run_dispatcher(
+    run_service: Annotated[LiteratureRunService, Depends(get_workflow_literature_run_service)],
+    job_queue: Annotated[LiteratureJobQueue, Depends(get_literature_job_queue)],
+) -> LiteratureRunDispatcher:
+    """Persist queue state before sending the message, then release the connection."""
+    return LiteratureRunDispatcher(run_service, job_queue)
+
+
+def get_workflow_paper_selection_service() -> PaperSelectionService:
+    """Persist selection without holding a request connection during resume."""
+    return PaperSelectionService(
+        literature_run_repository=TransactionalLiteratureRunRepository(async_session_factory),
+        paper_selection_repository=TransactionalPaperSelectionRepository(async_session_factory),
+    )
+
+
+def get_workflow_code_input_loader() -> SelectedPaperCodeInputLoader:
+    """Release read connections before running Code or Validation nodes."""
+    return SelectedPaperCodeInputLoader(
+        paper_repository=TransactionalPaperRepository(async_session_factory),
+        literature_run_repository=TransactionalLiteratureRunRepository(async_session_factory),
+    )
+
+
 def get_module_build_graph(
     literature_dispatcher: Annotated[
         LiteratureRunDispatcher,
-        Depends(get_literature_run_dispatcher),
+        Depends(get_workflow_literature_run_dispatcher),
     ],
     code_agent: Annotated[
         CodeAgent,
@@ -488,7 +541,7 @@ def get_module_build_graph(
     ],
     code_input_loader: Annotated[
         SelectedPaperCodeInputLoader,
-        Depends(get_code_input_loader),
+        Depends(get_workflow_code_input_loader),
     ],
     code_run_service: Annotated[
         CodeRunService,
@@ -547,7 +600,7 @@ def get_module_workflow_service(
 def get_module_workflow_coordinator(
     run_service: Annotated[
         LiteratureRunService,
-        Depends(get_literature_run_service),
+        Depends(get_workflow_literature_run_service),
     ],
     workflow_service: Annotated[
         ModuleWorkflowService,
@@ -555,7 +608,7 @@ def get_module_workflow_coordinator(
     ],
     selection_service: Annotated[
         PaperSelectionService,
-        Depends(get_paper_selection_service),
+        Depends(get_workflow_paper_selection_service),
     ],
 ) -> ModuleWorkflowCoordinator:
     """获取对应记录。"""

@@ -74,8 +74,26 @@ class ModuleWorkflowLifecycleService:
         run = await self.get(literature_run_id)
         if run.status in _TERMINAL_STATUSES:
             return run
+        if run.status is status and run.error == error:
+            return run  # Repeated callbacks must not reset the pause clock.
+        now = datetime.now(timezone.utc)
+        deadline = run.deadline_at
+        pause_started = run.selection_wait_started_at
+        if run.status is ModuleWorkflowRunStatus.WAITING_FOR_SELECTION:
+            # updated_at covers legacy selection waits created before this field.
+            pause_started = pause_started or run.updated_at or now
+            if status is not ModuleWorkflowRunStatus.WAITING_FOR_SELECTION:
+                deadline += max(now - pause_started, timedelta())
+                pause_started = None
+        elif status is ModuleWorkflowRunStatus.WAITING_FOR_SELECTION:
+            if now >= deadline:
+                # Do not forgive a real execution timeout before human waiting.
+                status = ModuleWorkflowRunStatus.TIMED_OUT
+                error = "Workflow deadline exceeded"
+            else:
+                pause_started = now
         finished_at = (
-            datetime.now(timezone.utc)
+            now
             if status in _TERMINAL_STATUSES
             else None
         )
@@ -83,6 +101,8 @@ class ModuleWorkflowLifecycleService:
             {
                 **run.model_dump(),
                 "status": status,
+                "deadline_at": deadline,
+                "selection_wait_started_at": pause_started if status is ModuleWorkflowRunStatus.WAITING_FOR_SELECTION else None,
                 "finished_at": finished_at,
                 "error": error,
             }
@@ -106,6 +126,7 @@ class ModuleWorkflowLifecycleService:
                 "status": ModuleWorkflowRunStatus.CANCELLED,
                 "cancellation_requested_at": now,
                 "finished_at": now,
+                "selection_wait_started_at": None,
             }
         )
         return await self.repository.save(cancelled)
@@ -125,6 +146,10 @@ class ModuleWorkflowLifecycleService:
             ModuleWorkflowRunStatus.FAILED,
         }:
             return WorkflowControlStatus.ACTIVE
+        if run.status is ModuleWorkflowRunStatus.WAITING_FOR_SELECTION:
+            pause_started = run.selection_wait_started_at or run.updated_at
+            if pause_started is not None and pause_started < run.deadline_at:
+                return WorkflowControlStatus.ACTIVE
 
         if datetime.now(timezone.utc) >= run.deadline_at:
             await self.set_status(
@@ -162,15 +187,17 @@ class ModuleWorkflowLifecycleService:
         )
         if timeout < 1:
             raise ValueError("timeout_seconds must be positive")
+        now = datetime.now(timezone.utc)
         resumed = ModuleWorkflowRun.model_validate(
             {
                 **run.model_dump(),
                 "status": status,
                 "deadline_at": (
-                    datetime.now(timezone.utc)
+                    now
                     + timedelta(seconds=timeout)
                 ),
                 "finished_at": None,
+                "selection_wait_started_at": now if status is ModuleWorkflowRunStatus.WAITING_FOR_SELECTION else None,
                 "error": None,
             }
         )

@@ -56,6 +56,12 @@ class ValidationAgent:
         request: ValidationRequest,
     ) -> list[ValidationReport]:
         """执行当前任务。"""
+        if request.policy.workspace_limit_mb is not None:
+            # One sandbox at a time prevents N papers multiplying the task budget.
+            return [
+                await self._validate_artifact(request, artifact)
+                for artifact in request.artifacts
+            ]
         return list(
             await asyncio.gather(
                 *(

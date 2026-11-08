@@ -1,4 +1,5 @@
 from module_agent.code.domain.request import CodePaperInput
+from module_agent.shared.exceptions import UnsafePaperSelectionError
 from module_agent.literature.domain.repositories.paper import (
     PaperRepository,
 )
@@ -57,6 +58,8 @@ class SelectedPaperCodeInputLoader:
         for paper_id in selected_paper_ids:
             paper = paper_by_id[paper_id]
             run_paper = run_paper_by_id.get(paper_id)
+            if run_paper and run_paper.integrity is not None and run_paper.integrity.blocked:
+                raise UnsafePaperSelectionError(literature_run_id, [paper_id])
 
             result.append(
                 CodePaperInput(

@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -72,6 +72,17 @@ class CodeWorkspace(Protocol):
     ) -> Path:
         """返回指定论文的复现工程目录。"""
         ...
+
+
+class WorkspaceBudgetGuard(Protocol):
+    """Stop a Code Agent operation when its task directory exceeds budget."""
+
+    async def run(
+        self,
+        literature_run_id: int,
+        limit_mb: int,
+        operation: Callable[[], Awaitable[list[CodeArtifact]]],
+    ) -> list[CodeArtifact]: ...
 
 
 class ReproductionPlanner(Protocol):

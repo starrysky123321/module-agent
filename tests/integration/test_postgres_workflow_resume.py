@@ -6,6 +6,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg import AsyncConnection
+from psycopg_pool import AsyncConnectionPool
+
+from module_agent.shared.checkpoint.postgres import PostgresCheckpointerManager
 
 from module_agent.shared.config import app_settings
 from module_agent.workflow.domain import PaperSelectionRequest
@@ -110,5 +114,40 @@ def test_workflow_resumes_after_postgres_connection_is_reopened() -> None:
                 database_url
             ) as cleanup_checkpointer:
                 await cleanup_checkpointer.adelete_thread(thread_id)
+
+    asyncio.run(verify())
+
+
+def test_compiled_workflow_survives_a_stale_checkpoint_connection_without_rebuild():
+    """Kill only this test's own idle backend; keep the saver and graph unchanged."""
+    database_url = app_settings.langgraph_database_url
+    assert database_url, "LANGGRAPH_DATABASE_URL must be configured"
+    run_id = uuid4().int % 2_000_000_000 + 1
+    thread_id = f"literature-run:{run_id}"
+
+    async def verify():
+        manager = PostgresCheckpointerManager(database_url)
+        saver = await manager.start()
+        try:
+            service = _workflow_service(saver)
+            prompt = await service.start_paper_selection(run_id)
+            assert isinstance(saver.conn, AsyncConnectionPool)
+            async with saver.conn.connection() as owned_connection:
+                backend_pid = owned_connection.info.backend_pid
+            # It is now idle in this test-owned pool, not a user task connection.
+            async with await AsyncConnection.connect(database_url, autocommit=True) as control:
+                await control.execute("SELECT pg_terminate_backend(%s)", (backend_pid,))
+            # Do not call health/restart before the real graph read.
+            restored = await service.start_paper_selection(run_id)
+            assert restored == prompt
+            assert manager.get_checkpointer() is saver
+            state = await service.resume_paper_selection(run_id, PaperSelectionRequest(selected_paper_ids=[51, 42]))
+            assert state["status"] == "completed"
+            await manager.check_health()
+        finally:
+            try:
+                await saver.adelete_thread(thread_id)
+            finally:
+                await manager.close()
 
     asyncio.run(verify())

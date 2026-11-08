@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from module_agent.literature.domain.paper import Paper
 from module_agent.literature.domain.method import PaperMethodProfile
+from module_agent.literature.domain.integrity import PaperIntegrity
 
 
 
@@ -22,6 +23,7 @@ class LiteratureRunPaper(BaseModel):
     matched_terms: list[str] = Field(default_factory=list)
     # Literature Agent 提取的方法画像。
     method_profile: PaperMethodProfile | None = None
+    integrity: PaperIntegrity | None = None
 
 
 class LiteraturePaperRecommendation(Paper):
@@ -37,3 +39,4 @@ class LiteraturePaperRecommendation(Paper):
     matched_terms: list[str] = Field(default_factory=list)
     # Literature Agent 提取的方法画像。
     method_profile: PaperMethodProfile | None = None
+    integrity: PaperIntegrity | None = None

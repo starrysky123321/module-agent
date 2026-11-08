@@ -9,6 +9,8 @@ from module_agent.literature.domain.method import (
     PaperMethodExtractionResult,
     PaperMethodExtractor,
     PaperMethodProfile,
+    PaperMethodExtractionError,
+    PaperMethodExtractionIssue,
 )
 from module_agent.literature.application.method_extraction import (
     BatchedPaperMethodExtractor,
@@ -85,10 +87,48 @@ def test_fallback_extractor_returns_unknown_profile_with_warning() -> None:
     assert all(item.research_problem is None for item in result.profiles)
     assert all(item.module_type is None for item in result.profiles)
     assert all(item.core_method is None for item in result.profiles)
-    assert result.warnings == [
-        "Paper method extraction failed (RuntimeError); "
-        "unknown profiles were used"
-    ]
+    assert len(result.issues) == len(candidates)
+    assert [issue.source_id for issue in result.issues] == ["W123", "W124"]
+    assert all(issue.code == "extractor_error" for issue in result.issues)
+    assert all("RuntimeError" in warning for warning in result.warnings)
+
+
+def test_batch_failure_includes_specific_controlled_reason_for_each_paper(method_logs: list[str]) -> None:
+    primary = AsyncMock(spec=PaperMethodExtractor)
+    primary.extract_many.side_effect = PaperMethodExtractionError("no_parsed_result", "Qwen returned no parsed method extraction result")
+    result = asyncio.run(FallbackPaperMethodExtractor(primary).extract_many(request(), [paper("W1"), paper("W2")]))
+
+    assert [issue.source_id for issue in result.issues] == ["W1", "W2"]
+    assert all(issue.code == "no_parsed_result" for issue in result.issues)
+    assert all("no parsed method extraction result" in warning for warning in result.warnings)
+    logs = "".join(method_logs)
+    assert "no_parsed_result" in logs and "W1" in logs and "W2" in logs
+
+
+def test_fallback_does_not_log_raw_provider_exception_secrets(method_logs: list[str]) -> None:
+    primary = AsyncMock(spec=PaperMethodExtractor)
+    primary.extract_many.side_effect = RuntimeError("Authorization: Bearer DO-NOT-LOG-THIS")
+    result = asyncio.run(FallbackPaperMethodExtractor(primary).extract_many(request(), [paper()]))
+
+    assert "DO-NOT-LOG-THIS" not in "".join(method_logs) + str(result.model_dump())
+
+
+def test_partial_recovery_metric_is_not_reported_as_full_success() -> None:
+    issue = PaperMethodExtractionIssue(source="openalex", source_id="W2", code="missing_profile", message="Missing returned profile")
+    primary = AsyncMock(spec=PaperMethodExtractor)
+    primary.extract_many.return_value = PaperMethodExtractionResult(
+        profiles=[
+            PaperMethodProfile(source="openalex", source_id="W1", confidence=0.9),
+            PaperMethodProfile(source="openalex", source_id="W2", confidence=0),
+        ], issues=[issue], warnings=[issue.as_warning()],
+    )
+    extractor = FallbackPaperMethodExtractor(primary, timeout_seconds=1, model="test-qwen")
+    result = asyncio.run(extractor.extract_many(request(), [paper("W1"), paper("W2")]))
+
+    assert [profile.confidence for profile in result.profiles] == [0.9, 0]
+    assert result.llm_metrics[0].outcome.value == "fallback"
+    assert result.llm_metrics[0].error_type == "PaperMethodExtractionError"
+    assert result.issues == [issue]
 
 
 def test_fallback_extractor_propagates_cancellation() -> None:
@@ -169,6 +209,20 @@ def test_batched_extractor_propagates_inner_error() -> None:
 
     with pytest.raises(RuntimeError, match="inner failed"):
         asyncio.run(extractor.extract_many(request(), [paper()]))
+
+
+def test_batched_extractor_preserves_per_paper_issues_across_batches() -> None:
+    inner = AsyncMock(spec=PaperMethodExtractor)
+    issue = PaperMethodExtractionIssue(source="openalex", source_id="W2", code="claims_without_evidence", message="Claims lack evidence")
+    inner.extract_many.side_effect = [
+        PaperMethodExtractionResult(profiles=[PaperMethodProfile(source="openalex", source_id="W1", confidence=0.9)]),
+        PaperMethodExtractionResult(profiles=[PaperMethodProfile(source="openalex", source_id="W2", confidence=0)], issues=[issue], warnings=[issue.as_warning()]),
+    ]
+    result = asyncio.run(BatchedPaperMethodExtractor(inner, batch_size=1).extract_many(request(), [paper("W1"), paper("W2")]))
+
+    assert [profile.confidence for profile in result.profiles] == [0.9, 0]
+    assert result.issues == [issue]
+    assert result.warnings == [issue.as_warning()]
 
 
 @pytest.mark.parametrize(

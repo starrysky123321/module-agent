@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="检索论文、选择文献、获取代码和查看验证结果。">
+  <title>Module Agent · 工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='10' fill='%23365ce6'/%3E%3Ctext x='9' y='34' fill='white' font-size='31' font-family='sans-serif'%3EM%3C/text%3E%3C/svg%3E">
+  <link id="workbench-stylesheet" rel="stylesheet" href="/ui/assets/workbench.css">
+  <script type="module" src="/ui/assets/app.mjs"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳转到内容</a>
+  <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="关闭导航" hidden></button>
+  <aside id="sidebar" class="sidebar">
+    <a class="brand" href="/">Module Agent</a>
+    <button id="new-task" class="nav-item active" aria-current="page"><svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg><span class="nav-label">新建任务</span></button>
+    <nav aria-label="导航">
+      <button id="open-run" class="nav-item"><svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" focusable="false"><path d="M3 7h7l2 3h9l-3 10H3V7Zm0 0V4h7l2 3h8v3"/></svg><span class="nav-label">打开已有任务</span></button>
+      <a href="/docs" target="_blank" rel="noopener" class="nav-item"><svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" focusable="false"><path d="M6 3h9l4 4v14H6V3Zm9 0v5h4M9 12h7m-7 4h7"/></svg><span class="nav-label">API 文档</span></a>
+    </nav>
+    <div class="history-header"><div><h2>最近打开</h2><span id="history-count" class="tiny-count">0</span></div><button id="clear-history" type="button" class="text-button" title="删除本列表中的任务，执行中的任务不可删除" hidden>删除全部</button></div>
+    <div id="history-list" class="history-list"></div>
+    <button id="connection-settings" class="nav-item sidebar-settings"><svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" focusable="false"><path d="M4 7h16M4 17h16M9 4v6m6 4v6"/></svg><span class="nav-label">连接设置</span></button>
+  </aside>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-title"><button id="menu-toggle" class="button small mobile-only" aria-controls="sidebar" aria-expanded="false" aria-label="打开导航">☰</button><span>工作台</span></div>
+      <div class="topbar-right"><span id="health" class="health" role="status" data-state="loading"><span class="status-dot"></span><span id="health-text">正在连接</span></span><button id="retry-connection" class="text-button" hidden>重试连接</button><button id="open-run-mobile" class="button small mobile-only">打开任务</button></div>
+    </header>
+    <main id="main" tabindex="-1">
+      <div id="style-alert" class="notice error" role="alert" hidden>页面样式未加载，请检查网络后<button id="retry-styles" type="button" class="text-button">重新加载页面</button>。</div>
+      <div id="notice" role="alert" class="notice" hidden></div>
+      <section id="create-view">
+        <div class="page-heading"><div><h1>新建科研任务</h1><p class="page-description">从研究主题开始，检索论文并选择后续处理的代码。</p></div></div>
+        <section class="panel form-panel">
+          <form id="search-form">
+            <label for="topic" class="topic-label">研究主题 <span class="required-mark" aria-hidden="true">*</span></label>
+            <textarea id="topic" name="topic" maxlength="500" rows="2" required placeholder="填写研究方向、任务或方法，例如：轻量网络的手写数字识别" aria-describedby="topic-error"></textarea>
+            <p id="topic-error" class="field-error" hidden></p>
+            <div class="example-tags"><span>试试这些主题</span><button id="mnist-example" type="button" class="topic-example">手写数字识别</button><button id="m5-example" type="button" class="topic-example">M5 / MNIST 试跑案例</button><button type="button" class="topic-example" data-topic="面向长文档问答的检索增强生成" data-keywords="retrieval augmented generation, long document question answering">检索增强生成</button><button type="button" class="topic-example" data-topic="时间序列异常检测" data-keywords="time series, anomaly detection">时间序列异常检测</button></div>
+            <div class="form-grid search-basics">
+              <fieldset class="date-range"><legend>论文发表时间范围</legend><div class="date-inputs"><div><label class="sr-only" for="start-date">开始日期</label><input id="start-date" name="start_date" type="date" required aria-describedby="date-error"></div><span aria-hidden="true">至</span><div><label class="sr-only" for="end-date">结束日期</label><input id="end-date" name="end_date" type="date" required aria-describedby="date-error"></div></div><p id="date-error" class="field-error" hidden></p><p class="field-hint">按论文发表日期筛选</p></fieldset>
+              <div class="result-limit"><label for="max-results">论文数量</label><div class="number-with-unit"><input id="max-results" name="max_results" type="number" min="1" max="20" value="3" required><span>篇</span></div><p class="field-hint">每次 1–20 篇</p></div>
+            </div>
+            <details id="search-options" class="options">
+              <summary><span class="disclosure-copy"><span>更多检索条件</span><span class="summary-description">关键词、会议期刊与代码要求</span></span><span class="disclosure-chevron" aria-hidden="true"></span></summary>
+              <div class="details-body">
+                <label for="description">研究目标</label><textarea id="description" name="description" maxlength="5000" rows="3" placeholder="补充想解决的问题或关注的方法"></textarea>
+                <label for="keywords">关键词</label><input id="keywords" name="keywords" placeholder="多个关键词用逗号分隔">
+                <div class="form-grid"><div><label for="ranking-system">会议 / 期刊评级</label><select id="ranking-system" name="ranking_system"><option value="">不限评级</option><option value="ccf">CCF</option><option value="core">ICORE</option></select></div><div id="quality-levels" hidden><label for="allowed-levels">允许的等级</label><input id="allowed-levels" name="allowed_levels" placeholder="A, B"><p id="levels-hint" class="field-hint">多个等级用逗号分隔。</p></div></div>
+                <label for="venues">指定会议 / 期刊</label><input id="venues" name="venues" placeholder="名称用逗号分隔">
+                <label for="exclusion-keywords">排除关键词</label><input id="exclusion-keywords" name="exclusion_keywords" placeholder="不希望出现的关键词">
+                <label for="code-requirements">代码要求</label><textarea id="code-requirements" name="code_requirements" maxlength="5000" rows="2" placeholder="例如：优先 PyTorch 实现"></textarea>
+              </div>
+            </details>
+            <details id="resource-options" class="options">
+              <summary><span class="disclosure-copy"><span>资源与验证设置</span><span class="summary-description">运行环境、资源预算与检查方式</span></span><span id="resource-budget-summary" class="summary-value">正在检测</span><span class="disclosure-chevron" aria-hidden="true"></span></summary>
+              <div class="details-body">
+                <div class="resource-heading"><p id="resource-scope" class="field-hint">检测运行 Agent 的环境</p><button id="detect-resources" type="button" class="button small">重新检测</button></div>
+                <div id="resource-summary" class="resource-summary"></div>
+                <p id="gpu-summary" class="field-hint"></p><div id="resource-message" class="field-hint" role="status"></div>
+                <div class="form-grid"><div><label for="cpu-limit">沙箱 CPU（核）</label><input id="cpu-limit" name="cpu_limit" type="number" min="0.1" max="8" step="0.05" value="1" required></div><div><label for="memory-limit">沙箱内存（MiB）</label><input id="memory-limit" name="memory_limit_mb" type="number" min="128" max="16384" step="1" value="1024" required></div></div>
+                <div class="form-grid"><div><label for="workspace-limit">工作区空间（MiB）</label><input id="workspace-limit" name="workspace_limit_mb" type="number" min="128" max="65536" step="1" value="2048" required></div><div><label for="temporary-storage">沙箱临时空间（MiB）</label><input id="temporary-storage" name="temporary_storage_mb" type="number" min="16" max="1024" step="1" value="512" required></div></div>
+                <div class="form-grid"><div><label for="execution-mode">验证方式</label><select id="execution-mode" name="validation_mode"><option value="static">静态检查</option><option value="sandbox" disabled>沙箱语法检查</option></select></div><div><label for="sandbox-timeout">单次检查限时（秒）</label><input id="sandbox-timeout" name="timeout_seconds" type="number" min="1" max="900" value="60" required></div></div>
+                <label for="gpu-device">沙箱设备</label><select id="gpu-device" name="gpu_device_id" disabled><option value="">CPU</option></select>
+                <p id="sandbox-state" class="field-hint"></p>
+                <p class="field-hint">CPU、内存与临时空间限制在沙箱执行时生效。工作区采用监测式限额，超限终止；GPU 按设备选择，不限制显存比例。检测结果不代表独占预留。</p>
+              </div>
+            </details>
+            <div class="resource-feedback" data-state="loading" id="resource-feedback"><span class="status-dot" aria-hidden="true"></span><p id="resource-status" role="status">正在检测资源，不影响默认静态流程。</p><button id="retry-resources" type="button" class="text-button" hidden>重试检测</button></div>
+            <div class="form-footer"><p id="execution-hint">仅做静态检查，不执行训练</p><button id="create-button" type="submit" class="button primary">开始检索</button></div>
+          </form>
+        </section>
+      </section>
+      <section id="run-view" hidden>
+        <div class="page-heading run-heading"><div><p id="run-eyebrow" class="run-id"></p><h1 id="run-title">正在读取任务</h1><p id="run-description" class="page-description"></p></div><div class="run-buttons"><button id="refresh-run" class="button">刷新</button><button id="export-run" class="button" disabled>导出记录</button><button id="delete-run" class="button danger-button" disabled>删除任务</button></div></div>
+        <div id="run-meta" class="run-meta"></div>
+        <section id="progress-panel" class="panel progress-panel">
+          <div class="progress-heading"><div><span id="progress-state" class="badge">处理中</span><button id="show-warnings" class="warning-link" hidden>查看提醒</button></div><span id="progress-elapsed" class="elapsed"></span></div>
+          <h2 id="progress-title" aria-live="polite">正在读取任务</h2>
+          <p id="progress-description">请稍候。</p>
+          <div id="run-progress" class="progress-track" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="4" data-mode="working" data-step="0"><span class="progress-fill"></span></div>
+          <div id="agent-progress" class="stage-list"></div>
+          <div class="progress-footer"><span id="progress-completed">按阶段显示，非耗时百分比</span><span id="poll-status" role="status" aria-live="polite">正在同步</span></div>
+        </section>
+        <div id="run-controls" class="run-controls"></div>
+        <section id="results-panel" class="panel result-panel" hidden><div class="panel-heading"><h2>结果</h2></div><div id="results-list"></div></section>
+        <section id="experiments-panel" class="panel" hidden aria-label="真实实验"></section>
+        <details id="papers-panel" class="panel paper-panel" open hidden>
+          <summary class="panel-heading"><h2>论文 <span id="paper-count" class="tiny-count">0</span></h2><span class="disclosure-arrow" aria-hidden="true"></span></summary>
+          <div class="details-body"><p id="papers-description" class="muted"></p><div id="papers-list"></div><div id="selection-footer" class="selection-footer" hidden><label for="selection-requirements">代码要求（选填）</label><textarea id="selection-requirements" maxlength="5000" rows="2" placeholder="为选中的论文补充代码需求"></textarea><div><span id="selection-count">已选择 0 篇</span><button id="confirm-selection" class="button primary" disabled>确认并继续</button></div></div></div>
+        </details>
+        <details id="warnings-panel" class="panel disclosure-panel" hidden><summary>提醒 <span id="warning-count" class="tiny-count">0</span></summary><div id="run-warnings" class="details-body"></div></details>
+        <details id="run-settings" class="panel disclosure-panel"><summary>任务设置与检索详情</summary><div class="details-body"><h3>资源预算</h3><div id="run-resources"></div><h3>检索记录</h3><div id="search-details"></div><p id="trace-id" class="field-hint"></p></div></details>
+        <details id="execution-details" class="panel disclosure-panel"><summary>运行记录</summary><div id="timeline" class="details-body"></div></details>
+      </section>
+    </main>
+  </div>
+  <dialog id="settings-dialog" aria-labelledby="settings-title"><form id="settings-form"><div class="dialog-heading"><h2 id="settings-title">连接设置</h2><button type="button" data-close-dialog class="icon-button" aria-label="关闭">×</button></div><p class="muted">生产模式需要填写服务配置的 API Token。</p><label for="api-token">API Token</label><input id="api-token" type="password" autocomplete="off" placeholder="开发模式可留空"><p class="field-hint">仅用于本次页面，刷新后需重新填写。</p><div class="dialog-footer"><button type="button" data-close-dialog class="button">取消</button><button class="button primary" type="submit">保存</button></div></form></dialog>
+  <dialog id="open-dialog" aria-labelledby="open-title"><form id="open-form"><div class="dialog-heading"><h2 id="open-title">打开任务</h2><button type="button" data-close-dialog class="icon-button" aria-label="关闭">×</button></div><label for="run-id-input">任务 ID</label><input id="run-id-input" type="number" min="1" step="1" required placeholder="例如：22"><div class="dialog-footer"><button type="button" data-close-dialog class="button">取消</button><button class="button primary" type="submit">打开</button></div></form></dialog>
+  <noscript><p>需要启用 JavaScript，也可以通过 /docs 操作。</p></noscript>
+</body>
+</html>

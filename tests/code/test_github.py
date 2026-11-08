@@ -24,6 +24,14 @@ def make_paper() -> CodePaperInput:
     )
 
 
+@pytest.mark.parametrize("http_status", [403,429,503])
+def test_one_unavailable_readme_does_not_destroy_other_candidates(http_status):
+    async def run():
+        async with httpx.AsyncClient(base_url="https://api.github.test",transport=httpx.MockTransport(lambda _:httpx.Response(http_status))) as client:
+            return await GitHubRepositorySearcher(client)._get_readme("fixture/unavailable")
+    assert asyncio.run(run()) is None
+
+
 def test_github_searcher_loads_repository_metadata_and_readme() -> None:
     requests: list[httpx.Request] = []
 
@@ -75,9 +83,7 @@ def test_github_searcher_loads_repository_metadata_and_readme() -> None:
         '"Reliable Graph Learning" in:name,description,readme'
     )
     assert requests[0].headers["authorization"] == "Bearer test-token"
-    assert requests[1].headers["accept"] == (
-        "application/vnd.github.raw+json"
-    )
+    assert requests[1].headers["accept"] == ("application/vnd.github.raw+json")
 
 
 def test_github_searcher_tolerates_missing_readme_and_skips_bad_items() -> None:
@@ -202,19 +208,16 @@ def test_github_searcher_includes_repository_found_in_pdf(
     assert len(candidates) == 1
     assert candidates[0].full_name == "alice/pdf-code"
     assert candidates[0].readme_text == "# PDF Code"
-    assert candidates[0].evidence[0].evidence_type is (
-        RepositoryEvidenceType.PAPER_URL
-    )
-    assert candidates[0].evidence[0].weight == 0.95
+    assert candidates[0].evidence[0].evidence_type is (RepositoryEvidenceType.PAPER_URL)
+    assert candidates[0].evidence[0].weight == 0.10
 
     scored = RepositoryScoringService().score(
-        make_paper().model_copy(
-            update={"pdf_url": "https://papers.test/paper.pdf"}
-        ),
+        make_paper().model_copy(update={"pdf_url": "https://papers.test/paper.pdf"}),
         candidates[0],
     )
-    assert scored.origin is RepositoryOrigin.OFFICIAL
-    assert scored.confidence >= 0.7
+    # 仅从 PDF 找到的链接也可能是基准或参考文献，不再直接认定官方实现。
+    assert scored.origin is RepositoryOrigin.UNKNOWN
+    assert scored.confidence < 0.7
 
 
 def test_github_searcher_keeps_title_results_when_pdf_download_fails(
@@ -232,14 +235,10 @@ def test_github_searcher_keeps_title_results_when_pdf_download_fails(
     monkeypatch.setattr(pdf_repository, "download", failing_download)
 
     candidates = asyncio.run(
-        _search_with_title_result_and_pdf(
-            "https://papers.test/missing.pdf"
-        )
+        _search_with_title_result_and_pdf("https://papers.test/missing.pdf")
     )
 
-    assert [candidate.full_name for candidate in candidates] == [
-        "alice/title-result"
-    ]
+    assert [candidate.full_name for candidate in candidates] == ["alice/title-result"]
 
 
 def test_github_searcher_keeps_title_results_when_pdf_is_invalid(
@@ -251,14 +250,10 @@ def test_github_searcher_keeps_title_results_when_pdf_is_invalid(
     monkeypatch.setattr(pdf_repository, "download", download_invalid_pdf)
 
     candidates = asyncio.run(
-        _search_with_title_result_and_pdf(
-            "https://papers.test/invalid.pdf"
-        )
+        _search_with_title_result_and_pdf("https://papers.test/invalid.pdf")
     )
 
-    assert [candidate.full_name for candidate in candidates] == [
-        "alice/title-result"
-    ]
+    assert [candidate.full_name for candidate in candidates] == ["alice/title-result"]
 
 
 async def _search_with_title_result_and_pdf(
@@ -323,3 +318,72 @@ def test_github_searcher_rejects_invalid_limit(limit: int) -> None:
 
     with pytest.raises(ValueError, match="between 1 and 100"):
         asyncio.run(run_search())
+
+
+@pytest.mark.parametrize("title_search_status", [200, 429])
+def test_spiral_declared_implementation_survives_benchmark_and_search_limits(
+    monkeypatch: pytest.MonkeyPatch,
+    title_search_status: int,
+) -> None:
+    requests: list[httpx.Request] = []
+    title = "SPIRAL: A Novel Time Series to Image Transformation Method for Vision-Based Anomaly Detection"
+    paper = make_paper().model_copy(
+        update={
+            "title": title,
+            "abstract": "Our code is publicly available at: https://github.com/Smendowski/SPIRAL.",
+            "pdf_url": "https://papers.test/spiral.pdf",
+        }
+    )
+
+    async def fake_download(*_: object, **__: object) -> bytes:
+        return b"%PDF-fake"
+
+    async def fake_extract(*_: object, **__: object) -> list[str]:
+        return ["https://github.com/TheDatumOrg/TSB-AD"]
+
+    monkeypatch.setattr(pdf_repository, "download", fake_download)
+    monkeypatch.setattr(pdf_repository, "extract_pdf_links", fake_extract)
+
+    def metadata(full_name: str) -> dict:
+        return {
+            "full_name": full_name,
+            "html_url": f"https://github.com/{full_name}",
+            "owner": {"login": full_name.split("/")[0]},
+        }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/search/repositories":
+            return httpx.Response(
+                title_search_status, json={"items": [metadata("TheDatumOrg/TSB-AD")]}
+            )
+        if request.url.path == "/repos/Smendowski/SPIRAL":
+            assert request.headers["authorization"] == "Bearer test-token"
+            return httpx.Response(200, json=metadata("Smendowski/SPIRAL"))
+        if request.url.path == "/repos/Smendowski/SPIRAL/readme":
+            return httpx.Response(200, text=f"Implementation of {title}")
+        if request.url.path == "/repos/TheDatumOrg/TSB-AD":
+            return httpx.Response(200, json=metadata("TheDatumOrg/TSB-AD"))
+        if request.url.path == "/repos/TheDatumOrg/TSB-AD/readme":
+            return httpx.Response(
+                200,
+                text="The Elephant in the Room: Towards A Reliable Time-Series Anomaly Detection Benchmark",
+            )
+        raise AssertionError(f"Unexpected request {request.url}")
+
+    async def run() -> list:
+        async with httpx.AsyncClient(
+            base_url="https://api.github.test", transport=httpx.MockTransport(handler)
+        ) as client:
+            candidates = await GitHubRepositorySearcher(
+                client, token="test-token"
+            ).search(paper, limit=1)
+            return RepositoryScoringService().score_many(paper, candidates)
+
+    best, benchmark = asyncio.run(run())
+    assert requests[0].url.path == "/repos/Smendowski/SPIRAL"
+    assert best.full_name == "Smendowski/SPIRAL"
+    assert best.origin is RepositoryOrigin.OFFICIAL
+    assert best.confidence >= 0.7
+    assert benchmark.origin is RepositoryOrigin.UNKNOWN
+    assert benchmark.confidence < 0.7

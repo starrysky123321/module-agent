@@ -10,6 +10,7 @@ from module_agent.literature.domain.search import (
     SourceSearchOutcome,
 )
 from module_agent.literature.domain.source import LiteratureSource
+from module_agent.shared.redaction import redact_sensitive_text
 
 
 class LiteratureSearchService:
@@ -42,7 +43,7 @@ class LiteratureSearchService:
                 warning = (
                     f"{metric.source} {action}: "
                     f"{type(batch).__name__}: "
-                    f"{batch}"
+                    f"{redact_sensitive_text(str(batch))}"
                 )
                 warnings.append(warning)
                 continue
@@ -50,6 +51,9 @@ class LiteratureSearchService:
             results.extend(batch)
 
         if self.sources and len(failures) == len(self.sources):
+            safe_message = redact_sensitive_text(str(failures[0]))
+            if safe_message != str(failures[0]):
+                raise RuntimeError(safe_message) from None
             raise failures[0]
 
         return SearchResponse(

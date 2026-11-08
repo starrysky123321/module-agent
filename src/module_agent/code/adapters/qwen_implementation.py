@@ -2,7 +2,6 @@
 
 import json
 import re
-import time
 import ast
 
 from openai import AsyncOpenAI
@@ -12,11 +11,8 @@ from module_agent.code.domain.artifact import (
     ReproductionPlan,
 )
 from module_agent.code.domain.request import CodePaperInput
-from module_agent.shared.llm.usage import (
-    capture_completion_usage,
-    clear_llm_token_usage,
-)
-from module_agent.shared.metrics import observe_llm_call
+from module_agent.shared.llm.usage import capture_completion_usage
+from module_agent.shared.llm.call import observed_model_call, validate_model_timeout
 
 
 SYSTEM_PROMPT = """
@@ -31,6 +27,8 @@ Return:
 - warnings: every assumption or missing paper detail that affects fidelity
 
 Constraints:
+- Write warnings, comments and explanatory docstrings in Simplified Chinese.
+  Preserve Python syntax, API identifiers and dependency specifiers unchanged.
 - no network, subprocess, shell, dynamic eval/exec, filesystem deletion, or secrets
 - no downloading datasets or weights
 - keep the implementation deterministic and CPU-compatible by default
@@ -43,11 +41,15 @@ _DEPENDENCY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*(?:[<>=!~]=?[^\s]+)?$")
 class QwenReproductionCodeGenerator:
     """Generate source as data; execution happens only in Validation sandbox."""
 
-    def __init__(self, client: AsyncOpenAI, model: str) -> None:
+    def __init__(
+        self, client: AsyncOpenAI, model: str, *, timeout_seconds: float = 180.0
+    ) -> None:
         self.client = client
         self.model = model.strip()
         if not self.model:
             raise ValueError("model 不能为空")
+        validate_model_timeout(timeout_seconds)
+        self.timeout_seconds = timeout_seconds
 
     async def generate(
         self,
@@ -61,9 +63,11 @@ class QwenReproductionCodeGenerator:
             "plan": plan.model_dump(mode="json"),
             "code_requirements": code_requirements,
         }
-        started_at = time.perf_counter()
-        clear_llm_token_usage()
-        try:
+        async with observed_model_call(
+            stage="reproduction_implementation",
+            model=self.model,
+            timeout_seconds=self.timeout_seconds,
+        ) as call:
             completion = await self.client.chat.completions.parse(
                 model=self.model,
                 messages=[
@@ -75,7 +79,8 @@ class QwenReproductionCodeGenerator:
                 ],
                 response_format=GeneratedImplementation,
             )
-            usage = capture_completion_usage(completion)
+            if getattr(completion, "usage", None) is not None:
+                call.usage = capture_completion_usage(completion)
             result = completion.choices[0].message.parsed
             if result is None:
                 raise ValueError("Qwen returned no parsed implementation")
@@ -88,22 +93,6 @@ class QwenReproductionCodeGenerator:
                 raise ValueError("Generated dependencies contain invalid specs")
             self._validate_source(result.algorithm_py, "algorithm_py")
             self._validate_source(result.test_algorithm_py, "test_algorithm_py")
-        except Exception:
-            observe_llm_call(
-                stage="reproduction_implementation",
-                model=self.model,
-                outcome="failed",
-                duration_seconds=time.perf_counter() - started_at,
-            )
-            raise
-        observe_llm_call(
-            stage="reproduction_implementation",
-            model=self.model,
-            outcome="success",
-            duration_seconds=time.perf_counter() - started_at,
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
-        )
         return result
 
     @staticmethod
@@ -113,9 +102,7 @@ class QwenReproductionCodeGenerator:
             tree = ast.parse(source)
         except SyntaxError as exc:
             raise ValueError(f"Generated {field} is not valid Python") from exc
-        forbidden_modules = {
-            "httpx", "requests", "socket", "subprocess", "urllib"
-        }
+        forbidden_modules = {"httpx", "requests", "socket", "subprocess", "urllib"}
         forbidden_calls = {"eval", "exec", "compile", "__import__"}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

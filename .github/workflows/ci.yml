@@ -52,6 +52,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - run: node --test tests/workbench/core.test.mjs
       - run: uv run ruff check src tests
       - run: uv run basedpyright src --level error
       - run: uv run alembic upgrade head

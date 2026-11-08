@@ -12,6 +12,7 @@ from module_agent.workflow.lifecycle import (
     ModuleWorkflowRun,
     WorkflowResumeRequest,
 )
+from module_agent.validation.domain.request import ValidationPolicy
 from module_agent.workflow.observation import (
     WorkflowNodeExecution,
     WorkflowRuntimeMetrics,
@@ -25,6 +26,15 @@ workflow_router = APIRouter(
     prefix="/workflow",
     tags=["module-workflow"],
 )
+
+
+@workflow_router.get("/runs/{run_id}/resources", response_model=ValidationPolicy | None)
+async def get_workflow_resources(
+    run_id: Annotated[int, Path(gt=0)],
+    workflow_service: Annotated[ModuleWorkflowService, Depends(get_module_workflow_service)],
+) -> ValidationPolicy | None:
+    """Return the budget persisted in the workflow checkpoint."""
+    return await workflow_service.get_resource_policy(run_id)
 
 
 @workflow_router.get(

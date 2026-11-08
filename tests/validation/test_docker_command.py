@@ -105,6 +105,24 @@ def test_build_command_omits_network_none_when_explicitly_allowed(
     assert "--network" not in command
 
 
+def test_build_command_uses_task_tmpfs_budget_and_selected_gpu(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    runner = DockerSandboxRunner(tmp_path, image="sandbox:local")
+    policy = ValidationPolicy.model_validate({
+        "mode": "sandbox", "cpu_limit": 1.5, "memory_limit_mb": 768,
+        "temporary_storage_mb": 128, "compute_target": "gpu",
+        "gpu_device_ids": ["GPU-test-123", "GPU-test-456"],
+    })
+    command = runner._build_command(SandboxExecutionRequest(
+        repository_path=repository, argv=["python", "--version"], policy=policy,
+    ), "test-budget")
+    assert command[command.index("--cpus") + 1] == "1.5"
+    assert command[command.index("--memory") + 1] == "768m"
+    assert command[command.index("--tmpfs") + 1] == "/tmp:rw,nosuid,size=128m"
+    assert command[command.index("--gpus") + 1] == '"device=GPU-test-123,GPU-test-456"'
+
+
 def test_build_command_rejects_blank_container_name(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()

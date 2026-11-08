@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from module_agent.shared.config import AppSettings
+from module_agent.api.workbench import is_workbench_public_path
 
 
 def register_api_auth_middleware(
@@ -43,6 +44,8 @@ def _requires_authentication(
     settings: AppSettings,
 ) -> bool:
     if settings.app_env.lower() != "production":
+        return False
+    if is_workbench_public_path(request.url.path):
         return False
     public_paths = {
         f"{settings.api_prefix}/health/",

@@ -1,101 +1,92 @@
 import asyncio
-from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from psycopg import OperationalError
+from psycopg.rows import dict_row
 
-from module_agent.shared.checkpoint.postgres import (
-    PostgresCheckpointerManager,
-)
-
-
-class FakeSaverContext:
-    def __init__(self) -> None:
-        self.saver = object()
-        self.enter_count = 0
-        self.exit_count = 0
-
-    async def __aenter__(self) -> Any:
-        self.enter_count += 1
-        return self.saver
-
-    async def __aexit__(self, *args: object) -> None:
-        self.exit_count += 1
+from module_agent.shared.checkpoint import postgres as checkpoint_module
+from module_agent.shared.checkpoint.postgres import PostgresCheckpointerManager
 
 
-def test_manager_starts_once_reuses_saver_and_closes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context = FakeSaverContext()
-    captured_urls: list[str] = []
+@pytest.fixture
+def pools(monkeypatch):
+    created = []
 
-    def from_conn_string(database_url: str) -> FakeSaverContext:
-        captured_urls.append(database_url)
-        return context
+    class FakePool:
+        check_connection = staticmethod(AsyncMock())
 
+        def __class_getitem__(cls, _):
+            return cls
+
+        def __init__(self, url, **kwargs):
+            self.url, self.kwargs = url, kwargs
+            self.closed = False
+            self.wait = AsyncMock()
+            self.connection = MagicMock()
+            self.connection.return_value.__aenter__ = AsyncMock()
+            self.connection.return_value.__aexit__ = AsyncMock(return_value=False)
+            self.connection.return_value.__aenter__.return_value.execute = AsyncMock()
+            created.append(self)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            self.closed = True
+
+    monkeypatch.setattr(checkpoint_module, "AsyncConnectionPool", FakePool)
     monkeypatch.setattr(
-        "module_agent.shared.checkpoint.postgres."
-        "AsyncPostgresSaver.from_conn_string",
-        from_conn_string,
+        checkpoint_module,
+        "AsyncPostgresSaver",
+        MagicMock(side_effect=lambda pool: MagicMock(conn=pool)),
     )
-    manager = PostgresCheckpointerManager(
-        "  postgresql://user:password@localhost/database  "
-    )
+    return created
 
-    async def exercise_manager() -> None:
-        first, second = await asyncio.gather(
-            manager.start(),
-            manager.start(),
-        )
 
-        assert first is context.saver
-        assert second is context.saver
-        assert manager.get_checkpointer() is context.saver
+def test_manager_starts_once_uses_checked_pool_and_closes(pools):
+    manager = PostgresCheckpointerManager("  postgresql://database  ")
+
+    async def exercise():
+        first, second = await asyncio.gather(manager.start(), manager.start())
+        assert first is second is manager.get_checkpointer()
+        assert first.conn is pools[0]
         await manager.close()
         await manager.close()
 
-    asyncio.run(exercise_manager())
-
-    assert captured_urls == ["postgresql://user:password@localhost/database"]
-    assert context.enter_count == 1
-    assert context.exit_count == 1
+    asyncio.run(exercise())
+    assert len(pools) == 1
+    pool = pools[0]
+    assert pool.url == "postgresql://database"
+    assert pool.closed
+    assert pool.kwargs["min_size"] == 1 and pool.kwargs["max_size"] == 5
+    assert pool.kwargs["timeout"] == 3
+    assert pool.kwargs["check"] is pool.check_connection
+    assert pool.kwargs["kwargs"] == {
+        "autocommit": True,
+        "prepare_threshold": 0,
+        "row_factory": dict_row,
+    }
+    pool.wait.assert_awaited_once_with(timeout=5)
     with pytest.raises(RuntimeError, match="started before using"):
         manager.get_checkpointer()
 
 
-def test_manager_rejects_empty_database_url() -> None:
+def test_manager_rejects_empty_database_url():
     manager = PostgresCheckpointerManager("   ")
-
     with pytest.raises(RuntimeError, match="database URL"):
         asyncio.run(manager.start())
-
     asyncio.run(manager.close())
 
 
-def test_manager_rebuilds_pool_and_retries_operational_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    contexts = [FakeSaverContext(), FakeSaverContext()]
-
-    def from_conn_string(_: str) -> FakeSaverContext:
-        return contexts.pop(0)
-
-    monkeypatch.setattr(
-        "module_agent.shared.checkpoint.postgres."
-        "AsyncPostgresSaver.from_conn_string",
-        from_conn_string,
-    )
+def test_manager_rebuilds_pool_and_retries_operational_failure(pools):
     manager = PostgresCheckpointerManager("postgresql://database")
-    seen_savers: list[object] = []
+    seen = []
 
-    async def exercise_manager() -> str:
-        attempts = 0
-
-        async def operation(saver: Any) -> str:
-            nonlocal attempts
-            attempts += 1
-            seen_savers.append(saver)
-            if attempts == 1:
+    async def exercise():
+        async def operation(saver):
+            seen.append(saver)
+            if len(seen) == 1:
                 raise OperationalError("connection closed")
             return "recovered"
 
@@ -103,34 +94,71 @@ def test_manager_rebuilds_pool_and_retries_operational_failure(
         await manager.close()
         return result
 
-    assert asyncio.run(exercise_manager()) == "recovered"
-    assert len(seen_savers) == 2
-    assert seen_savers[0] is not seen_savers[1]
+    assert asyncio.run(exercise()) == "recovered"
+    assert len(pools) == 2 and all(pool.closed for pool in pools)
+    assert seen[0] is not seen[1]
 
 
-def test_manager_does_not_retry_application_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context = FakeSaverContext()
-    monkeypatch.setattr(
-        "module_agent.shared.checkpoint.postgres."
-        "AsyncPostgresSaver.from_conn_string",
-        lambda _: context,
-    )
+def test_manager_does_not_retry_application_failure(pools):
     manager = PostgresCheckpointerManager("postgresql://database")
-    calls = 0
+    operation = AsyncMock(side_effect=ValueError("invalid workflow state"))
 
-    async def exercise_manager() -> None:
-        nonlocal calls
-
-        async def operation(_: Any) -> None:
-            nonlocal calls
-            calls += 1
-            raise ValueError("invalid workflow state")
-
+    async def exercise():
         with pytest.raises(ValueError, match="invalid workflow state"):
             await manager.run_with_recovery(operation)
         await manager.close()
 
-    asyncio.run(exercise_manager())
-    assert calls == 1
+    asyncio.run(exercise())
+    assert len(pools) == 1
+    operation.assert_awaited_once()
+
+
+def test_health_probes_active_pool_and_checkpoint_schema_without_writes(pools):
+    manager = PostgresCheckpointerManager("postgresql://database")
+
+    async def exercise():
+        await manager.start()
+        await manager.check_health()
+        connection = pools[0].connection.return_value.__aenter__.return_value
+        connection.execute.assert_awaited_once_with("SELECT 1 FROM checkpoints LIMIT 0")
+        await manager.close()
+
+    asyncio.run(exercise())
+
+
+def test_health_rejects_unstarted_manager_without_creating_pool(pools):
+    with pytest.raises(RuntimeError, match="not started"):
+        asyncio.run(PostgresCheckpointerManager("postgresql://database").check_health())
+    assert not pools
+
+
+def test_health_propagates_checkpoint_failure(pools):
+    manager = PostgresCheckpointerManager("postgresql://database")
+
+    async def exercise():
+        await manager.start()
+        pools[
+            0
+        ].connection.return_value.__aenter__.return_value.execute.side_effect = (
+            OperationalError("offline")
+        )
+        with pytest.raises(OperationalError):
+            await manager.check_health()
+        await manager.close()
+
+    asyncio.run(exercise())
+
+
+def test_manager_releases_pool_when_start_is_cancelled(pools, monkeypatch):
+    manager = PostgresCheckpointerManager("postgresql://database")
+    original_enter = checkpoint_module.AsyncConnectionPool.__aenter__
+
+    async def enter(pool):
+        await original_enter(pool)
+        pool.wait.side_effect = asyncio.CancelledError()
+        return pool
+
+    monkeypatch.setattr(checkpoint_module.AsyncConnectionPool, "__aenter__", enter)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(manager.start())
+    assert len(pools) == 1 and pools[0].closed

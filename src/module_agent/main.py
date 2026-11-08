@@ -17,6 +17,9 @@ from module_agent.api.auth import register_api_auth_middleware
 from module_agent.api.metrics import metrics_router
 from module_agent.api.audit import register_audit_middleware
 from module_agent.api.rate_limit import register_api_rate_limit_middleware
+from module_agent.api.workbench import register_workbench
+from module_agent.api.resources import resources_router
+from module_agent.experiments.api import experiment_router
 from module_agent.shared.cache.redis import redis_client
 
 
@@ -35,8 +38,11 @@ def create_app() -> FastAPI:
     register_audit_middleware(application)
     register_request_context_middleware(application)
     register_exception_handlers(application)
+    register_workbench(application, api_prefix=app_settings.api_prefix)
     application.include_router(metrics_router)
     application.include_router(health_router, prefix=app_settings.api_prefix)
+    application.include_router(resources_router, prefix=app_settings.api_prefix)
+    application.include_router(experiment_router, prefix=app_settings.api_prefix)
     application.include_router(source_search_router, prefix=app_settings.api_prefix)
     application.include_router(literature_router, prefix=app_settings.api_prefix)
     application.include_router(code_router, prefix=app_settings.api_prefix)

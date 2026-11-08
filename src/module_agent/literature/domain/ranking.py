@@ -36,6 +36,8 @@ class PaperRelevanceResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     # 各阶段模型调用指标。
     llm_metrics: list[LlmCallMetric] = Field(default_factory=list)
+    # 模型仅返回部分可对应的评分时，其余条目使用规则补齐。
+    used_rule_fallback: bool = False
 
 
 class PaperRelevanceScorer(Protocol):

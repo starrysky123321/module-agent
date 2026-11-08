@@ -10,6 +10,7 @@ from module_agent.literature.domain.events import (
 from module_agent.literature.domain.run import LiteratureRunStatus
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from module_agent.shared.context import observability_context
+from module_agent.shared.execution_control import ExecutionStopped
 
 LiteratureRunExecutorFactory = Callable[
     [AsyncSession],
@@ -50,7 +51,7 @@ class LiteratureWorker:
                 executor = self.executor_factory(session)
                 run = await executor.get_run(job.run_id)
                 already_completed = (
-                    run.status is LiteratureRunStatus.COMPLETED
+                    run.status in {LiteratureRunStatus.COMPLETED, LiteratureRunStatus.CANCELLED}
                 )
                 if not already_completed:
                     run = await executor.start(job.run_id)
@@ -63,7 +64,10 @@ class LiteratureWorker:
         async with self.session_factory() as session:
             async with session.begin():
                 executor = self.executor_factory(session)
-                await executor.execute_started(run)
+                try:
+                    await executor.execute_started(run)
+                except ExecutionStopped:
+                    pass  # 在事务内提交 cancelled，取消消息也可以安全确认。
 
         if job.resume_workflow:
             await self.completion_publisher.publish(job.run_id)

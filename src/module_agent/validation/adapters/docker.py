@@ -117,7 +117,7 @@ class DockerSandboxRunner:
             "--user",
             "65534:65534",
             "--tmpfs",
-            "/tmp:rw,nosuid,size=512m",
+            f"/tmp:rw,nosuid,size={request.policy.temporary_storage_mb}m",
             "--env",
             "HOME=/tmp",
             "--env",
@@ -128,7 +128,9 @@ class DockerSandboxRunner:
             command.extend(["--network", "none"])
 
         if request.policy.compute_target.value == "gpu":
-            command.extend(["--gpus", "all"])
+            devices = request.policy.gpu_device_ids
+            selector = f'"device={",".join(devices)}"' if devices else "all"
+            command.extend(["--gpus", selector])
 
         command.append(self.image)
         command.extend(request.argv)

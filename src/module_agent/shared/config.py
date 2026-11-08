@@ -52,6 +52,10 @@ class AppSettings(BaseSettings):
     literature_relevance_scorer: Literal["rule", "qwen"] = "rule"
     # 论文方法提取器的实现模式。
     literature_method_extractor: Literal["off", "qwen"] = "off"
+    # 仅核验短名单，外部不可达时记录未核验，不阻断检索。
+    literature_integrity_check_enabled: bool = True
+    literature_integrity_timeout_seconds: float = Field(default=4.0, gt=0, le=10)
+    literature_integrity_budget_seconds: float = Field(default=12.0, gt=0, le=30)
     
     # OpenAlex API 密钥。
     openalex_api_key: str = ""

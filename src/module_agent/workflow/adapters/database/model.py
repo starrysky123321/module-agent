@@ -42,6 +42,10 @@ class ModuleWorkflowRunModel(Base):
         nullable=False,
         index=True,
     )
+    # 人工选择阶段的计时暂停点；进程重启后仍可扣除等待时间。
+    selection_wait_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
     # 用户请求取消的时间。
     cancellation_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),

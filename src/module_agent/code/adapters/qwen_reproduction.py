@@ -1,15 +1,11 @@
 import json
-import time
 
 from openai import AsyncOpenAI
 
 from module_agent.code.domain.artifact import ReproductionPlan
 from module_agent.code.domain.request import CodePaperInput
-from module_agent.shared.llm.usage import (
-    capture_completion_usage,
-    clear_llm_token_usage,
-)
-from module_agent.shared.metrics import observe_llm_call
+from module_agent.shared.llm.usage import capture_completion_usage
+from module_agent.shared.llm.call import observed_model_call, validate_model_timeout
 
 SYSTEM_PROMPT = """
 You create implementation plans for computer science
@@ -17,6 +13,8 @@ papers when no trusted
 source-code repository is available.
 
 Rules:
+- Write research_problem, implementation_steps, inputs, outputs, open_questions
+  and warnings in Simplified Chinese. Keep package names and code identifiers unchanged.
 - Use only the supplied paper metadata and method
 profile.
 - Return a concrete implementation plan, not completed
@@ -34,7 +32,10 @@ by the paper.
 
 class QwenReproductionPlanner:
     """封装 QwenReproductionPlanner 相关的数据和行为。"""
-    def __init__(self, client: AsyncOpenAI, model: str) -> None:
+
+    def __init__(
+        self, client: AsyncOpenAI, model: str, *, timeout_seconds: float = 180.0
+    ) -> None:
         """初始化当前对象。"""
         normalized_model = model.strip()
         if not normalized_model:
@@ -42,7 +43,8 @@ class QwenReproductionPlanner:
 
         self.client = client
         self.model = normalized_model
-
+        validate_model_timeout(timeout_seconds)
+        self.timeout_seconds = timeout_seconds
 
     async def plan(
         self,
@@ -55,10 +57,12 @@ class QwenReproductionPlanner:
             "paper": paper.model_dump(mode="json"),
             "code_requirements": code_requirements,
         }
-        
-        started_at = time.perf_counter()
-        clear_llm_token_usage()
-        try:
+
+        async with observed_model_call(
+            stage="reproduction_planning",
+            model=self.model,
+            timeout_seconds=self.timeout_seconds,
+        ) as call:
             completion = await self.client.chat.completions.parse(
                 model=self.model,
                 messages=[
@@ -70,30 +74,10 @@ class QwenReproductionPlanner:
                 ],
                 response_format=ReproductionPlan,
             )
-            usage = capture_completion_usage(completion)
-        except Exception:
-            observe_llm_call(
-                stage="reproduction_planning",
-                model=self.model,
-                outcome="failed",
-                duration_seconds=time.perf_counter() - started_at,
-            )
-            raise
-        observe_llm_call(
-            stage="reproduction_planning",
-            model=self.model,
-            outcome="success",
-            duration_seconds=time.perf_counter() - started_at,
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
-        )
-        
-        result = completion.choices[0].message.parsed
-        
-        
-        if result is None:
-            raise ValueError("Qwen returned no parsed reproduction plan")
+            if getattr(completion, "usage", None) is not None:
+                call.usage = capture_completion_usage(completion)
+            result = completion.choices[0].message.parsed
+            if result is None:
+                raise ValueError("Qwen returned no parsed reproduction plan")
 
         return result
-        
-        

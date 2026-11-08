@@ -1,7 +1,6 @@
 import asyncio
 import ipaddress
 import multiprocessing
-import re
 import socket
 from contextlib import suppress
 from io import BytesIO
@@ -23,6 +22,10 @@ from module_agent.code.domain.errors import (
     UnsafePdfUrlError,
 )
 from module_agent.code.domain.request import CodePaperInput
+from module_agent.code.domain.github_links import (
+    extract_repository_links,
+    parse_repository_url,
+)
 
 MAX_PDF_BYTES = 25 * 1024 * 1024
 MAX_TEXT_BYTES = 2 * 1024 * 1024
@@ -35,13 +38,6 @@ MAX_PDF_PARSE_MEMORY_BYTES = 512 * 1024 * 1024
 PDF_PARSE_TIMEOUT_SECONDS = 15.0
 PDF_HEADER = b"%PDF-"
 
-GITHUB_PATTERN = re.compile(
-    r"https?://(?:www\.)?github\s*\.\s*com\s*/\s*"
-    r"(?P<owner>[A-Za-z0-9_.-]+)\s*/\s*"
-    r"(?P<repo>[A-Za-z0-9_]+(?:[.-](?:[ \t]*\r?\n[ \t]*)?"
-    r"[A-Za-z0-9_]+)*)",
-    re.IGNORECASE,
-)
 
 class PdfRepositorySearcher:
     """从论文 PDF 中发现 GitHub 仓库，并读取仓库元数据。"""
@@ -71,7 +67,7 @@ class PdfRepositorySearcher:
         self.parse_timeout_seconds = parse_timeout_seconds
         self.max_pages = max_pages
         self.max_memory_bytes = max_memory_bytes
-    
+
     async def search_github_links(
         self,
         paper: CodePaperInput,
@@ -81,20 +77,18 @@ class PdfRepositorySearcher:
         """搜索代码仓库。"""
 
         if not 1 <= limit <= 100:
-            raise ValueError(
-                "PDF repository search limit must be between 1 and 100"
-            )
+            raise ValueError("PDF repository search limit must be between 1 and 100")
 
         url = paper.pdf_url
         if url is None:
             return []
-        
+
         pdf_bytes = await download(
             url,
             max_bytes=self.max_bytes,
             timeout_seconds=self.timeout_seconds,
         )
-        
+
         github_links = await extract_pdf_links(
             pdf_bytes,
             timeout_seconds=self.parse_timeout_seconds,
@@ -103,23 +97,20 @@ class PdfRepositorySearcher:
             max_memory_bytes=self.max_memory_bytes,
         )
         github_links_limit = github_links[:limit]
-        
+
         repositories: list[dict[str, Any]] = []
 
         if not github_links_limit:
             return []
-        
+
         for link in github_links_limit:
             repo = await get_github_repository(self.client, link)
             if repo is None:
                 continue
-            
-            repositories.append(repo)
-        
-        
-            
-        return repositories
 
+            repositories.append(repo)
+
+        return repositories
 
 
 async def download(
@@ -216,9 +207,7 @@ async def _download_with_client(
             async for chunk in response.aiter_bytes():
                 downloaded += len(chunk)
                 if downloaded > max_bytes:
-                    raise PdfTooLargeError(
-                        f"PDF exceeds the {max_bytes}-byte limit"
-                    )
+                    raise PdfTooLargeError(f"PDF exceeds the {max_bytes}-byte limit")
                 chunks.append(chunk)
 
             content = b"".join(chunks)
@@ -251,8 +240,7 @@ def _reject_large_content_length(
         return
     if content_length > max_bytes:
         raise PdfTooLargeError(
-            f"PDF declares {content_length} bytes, above the "
-            f"{max_bytes}-byte limit"
+            f"PDF declares {content_length} bytes, above the {max_bytes}-byte limit"
         )
 
 
@@ -279,17 +267,13 @@ async def _validate_public_http_url(url: str) -> None:
         ) from exc
 
     if not addresses:
-        raise PdfDownloadError(
-            f"Could not resolve PDF hostname: {parsed.hostname}"
-        )
+        raise PdfDownloadError(f"Could not resolve PDF hostname: {parsed.hostname}")
 
     for _, _, _, _, sockaddr in addresses:
         host = sockaddr[0]
 
         if not isinstance(host, str):
-            raise PdfDownloadError(
-                f"Unexpected resolved PDF address: {sockaddr}"
-            )
+            raise PdfDownloadError(f"Unexpected resolved PDF address: {sockaddr}")
 
         host = host.split("%", 1)[0]
 
@@ -301,11 +285,8 @@ async def _validate_public_http_url(url: str) -> None:
             ) from exc
 
         if not ip.is_global:
-            raise UnsafePdfUrlError(
-                f"PDF URL resolves to a non-public address: {ip}"
-            )
-                
-        
+            raise UnsafePdfUrlError(f"PDF URL resolves to a non-public address: {ip}")
+
 
 async def extract_pdf_links(
     pdf_bytes: bytes,
@@ -496,49 +477,31 @@ def extract(
 
 def extract_github_links(text: str) -> list[str]:
     """从普通文本或带换行的 PDF 文本中规范化 GitHub 仓库地址。"""
-    links: set[str] = set()
-    for match in GITHUB_PATTERN.finditer(text):
-        owner = re.sub(r"\s+", "", match.group("owner"))
-        repo = re.sub(r"\s+", "", match.group("repo"))
-        if repo.casefold().endswith(".git"):
-            repo = repo[:-4]
-        if owner and repo:
-            links.add(f"https://github.com/{owner}/{repo}")
-    return sorted(links)
+    return extract_repository_links(text)
 
 
 def parse_github_repo_url(url: str) -> tuple[str, str] | None:
     """解析 GitHub 仓库 URL。"""
-    parsed = urlparse(url)
-    if parsed.hostname not in {"github.com", "www.github.com"}:
-        return None
-    
-    parts = [part for part in parsed.path.split("/") if part]
-    
-    if len(parts) < 2:
-        return None
-    
-    owner = parts[0]
-    repo = parts[1]
-    if repo.casefold().endswith(".git"):
-        repo = repo[:-4]
-    
-    return owner, repo
+    return parse_repository_url(url)
+
 
 async def get_github_repository(
     client: httpx.AsyncClient,
     url: str,
+    *,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     """获取 GitHub 仓库信息。"""
     parse = parse_github_repo_url(url)
-    
+
     if parse is None:
         return None
-    
+
     owner, repo = parse
-    
+
     response = await client.get(
         f"/repos/{owner}/{repo}",
+        headers=headers,
     )
 
     if response.status_code == 404:
@@ -547,6 +510,3 @@ async def get_github_repository(
     response.raise_for_status()
 
     return response.json()
-    
-    
-    

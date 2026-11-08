@@ -9,6 +9,7 @@ from module_agent.code.domain.ports import (
     ReproductionBuilder,
     ReproductionPlanner,
     ReproductionCodeGenerator,
+    WorkspaceBudgetGuard,
 )
 
 from module_agent.code.domain.artifact import (
@@ -23,6 +24,8 @@ from module_agent.code.domain.repository import (
     RepositoryOrigin,
 )
 import asyncio
+from module_agent.shared.llm.call import capture_model_calls
+from module_agent.shared.redaction import redact_sensitive_text
 
 
 class CodeAgent:
@@ -41,12 +44,16 @@ class CodeAgent:
         scorer: RepositoryScoringService | None = None,
         confidence_threshold: float = 0.7,
         search_limit: int = 10,
+        workspace_budget: WorkspaceBudgetGuard | None = None,
+        max_concurrent_papers: int = 2,
     ) -> None:
         """注入仓库搜索、获取、规划和工作区能力。"""
         if confidence_threshold < 0 or confidence_threshold > 1:
             raise ValueError("confidence_threshold 必须在 0 到 1 之间")
         if search_limit <= 0:
             raise ValueError("search_limit 必须大于 0")
+        if max_concurrent_papers < 1:
+            raise ValueError("max_concurrent_papers 必须大于 0")
         if scorer is None:
             scorer = RepositoryScoringService()
         
@@ -60,13 +67,32 @@ class CodeAgent:
         self.scorer = scorer  # 根据证据计算候选可信度。
         self.confidence_threshold = confidence_threshold  # 最低可信门槛。
         self.search_limit = search_limit  # 每篇论文最多搜索数量。
+        self.workspace_budget = workspace_budget
+        self.max_concurrent_papers = max_concurrent_papers
     
     
     async def run(self, request: CodeAgentRequest) -> list[CodeArtifact]:
         """并发处理请求中的所有已选论文。"""
+        if request.workspace_limit_mb is not None:
+            if self.workspace_budget is None:
+                raise ValueError("Workspace budget enforcement is not configured")
+            return await self.workspace_budget.run(
+                request.literature_run_id,
+                request.workspace_limit_mb,
+                lambda: self._run_papers(request),
+            )
+        return await self._run_papers(request)
+
+    async def _run_papers(self, request: CodeAgentRequest) -> list[CodeArtifact]:
+        """Run all selected papers inside one shared workspace budget."""
+        semaphore = asyncio.Semaphore(self.max_concurrent_papers)
+        async def process(paper: CodePaperInput) -> CodeArtifact:
+            async with semaphore:
+                return await self._process_paper_safely(request, paper)
+
         artifacts = await asyncio.gather(
             *(
-                self._process_paper_safely(request, paper)
+                process(paper)
                 for paper in request.papers
             )
         )
@@ -230,14 +256,9 @@ class CodeAgent:
         paper: CodePaperInput,
     ) -> CodeArtifact:
         """隔离单篇论文异常，避免影响同批其他论文。"""
-        try:
-            return await self._process_paper(request, paper)
-        except Exception as exc:
-            error_message = str(exc).strip() or type(exc).__name__
-
-        return CodeArtifact(
-            paper_id=paper.paper_id,
-            origin=CodeArtifactOrigin.UNKNOWN,
-            status=CodeArtifactStatus.FAILED,
-            error=error_message,
-        )
+        with capture_model_calls() as calls:
+            try:
+                artifact = await self._process_paper(request, paper)
+            except Exception as exc:
+                artifact = CodeArtifact(paper_id=paper.paper_id,origin=CodeArtifactOrigin.UNKNOWN,status=CodeArtifactStatus.FAILED,error=redact_sensitive_text(str(exc).strip() or type(exc).__name__))
+            return artifact.model_copy(update={"llm_metrics":list(calls),"warnings":[redact_sensitive_text(warning) for warning in artifact.warnings]})

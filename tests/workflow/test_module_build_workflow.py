@@ -519,7 +519,8 @@ def test_main_graph_stops_after_literature_retry_budget_is_exhausted() -> None:
     assert "__interrupt__" not in result
 
 
-def test_code_node_records_successful_attempt() -> None:
+@pytest.mark.parametrize("workspace_limit_mb", [None, 128])
+def test_code_node_records_successful_attempt(workspace_limit_mb: int | None) -> None:
     loader = _code_input_loader()
     loader.load.return_value = [
         CodePaperInput(
@@ -554,6 +555,7 @@ def test_code_node_records_successful_attempt() -> None:
             {
                 "literature_run_id": 7,
                 "selected_paper_ids": [51],
+                "validation_policy": {"workspace_limit_mb": workspace_limit_mb},
             }
         )
     )
@@ -561,6 +563,7 @@ def test_code_node_records_successful_attempt() -> None:
     assert result["attempts"] == {"code": 1}
     assert result["status"] == "code_ready"
     assert result["code_artifacts"][0]["paper_id"] == 51
+    assert code_agent.run.await_args.args[0].workspace_limit_mb == workspace_limit_mb
 
 
 def test_code_node_converts_input_loading_error_to_failure() -> None:

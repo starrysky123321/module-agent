@@ -11,6 +11,7 @@ from module_agent.code.adapters.qwen_reproduction import QwenReproductionPlanner
 from module_agent.code.adapters.repository_analysis import LocalRepositoryAnalyzer
 from module_agent.code.adapters.reproduction import LocalReproductionBuilder
 from module_agent.code.adapters.workspace import LocalCodeWorkspace
+from module_agent.code.adapters.workspace_budget import LocalWorkspaceBudgetGuard
 from module_agent.code.application.agent import CodeAgent
 from module_agent.shared.llm.qwen_client import QwenClientManager
 
@@ -32,6 +33,7 @@ def build_code_agent(
         pdf_max_pages: int = 200,
         pdf_parse_memory_bytes: int = 512 * 1024 * 1024,
         landing_page_max_bytes: int = 2 * 1024 * 1024,
+        llm_timeout_seconds: float = 180.0,
     ) -> CodeAgent:
     """组装 Code Agent 的外部适配器和应用服务。"""
     searcher = GitHubRepositorySearcher(
@@ -54,6 +56,7 @@ def build_code_agent(
     planner = QwenReproductionPlanner(
         client=qwen_client,
         model=qwen_model,
+        timeout_seconds=llm_timeout_seconds,
     )
     
     workspace = LocalCodeWorkspace(
@@ -70,8 +73,10 @@ def build_code_agent(
         reproduction_code_generator=QwenReproductionCodeGenerator(
             client=qwen_client,
             model=qwen_model,
+            timeout_seconds=llm_timeout_seconds,
         ),
         confidence_threshold=confidence_threshold,
         search_limit=search_limit,
+        workspace_budget=LocalWorkspaceBudgetGuard(workspace_root),
     )
     

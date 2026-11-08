@@ -24,6 +24,7 @@ from module_agent.bootstrap.api_dependencies import (
     get_paper_relevance_scorer,
     get_literature_query_planner,
     get_literature_run_dispatcher,
+    get_workflow_literature_run_dispatcher,
     get_literature_run_executor,
     get_literature_run_service,
     get_langgraph_checkpointer,
@@ -263,6 +264,7 @@ def test_code_agent_dependency_uses_shared_clients_and_settings(
             landing_page_max_bytes=(
                 api_dependencies.app_settings.code_landing_page_max_bytes
             ),
+            llm_timeout_seconds=api_dependencies.app_settings.qwen_call_timeout_seconds,
         )
 
 
@@ -307,7 +309,7 @@ def test_fastapi_builds_module_workflow_with_injected_dependencies() -> None:
     validation_agent = MagicMock(spec=ValidationAgent)
     supervisor_agent = SupervisorAgent()
     checkpointer = InMemorySaver()
-    application.dependency_overrides[get_literature_run_dispatcher] = (
+    application.dependency_overrides[get_workflow_literature_run_dispatcher] = (
         lambda: literature_dispatcher
     )
     application.dependency_overrides[get_code_agent] = lambda: code_agent
@@ -384,3 +386,32 @@ def test_module_workflow_coordinator_reuses_injected_services() -> None:
     assert coordinator.run_service is run_service
     assert coordinator.workflow_service is workflow_service
     assert coordinator.selection_service is selection_service
+
+
+def test_workflow_dependency_tree_does_not_acquire_a_request_session():
+    """Guard against reintroducing nested pool checkouts under concurrency."""
+    application = FastAPI()
+
+    async def forbidden_request_session():
+        raise AssertionError("Workflow must not hold an HTTP transaction")
+        yield  # pragma: no cover
+
+    application.dependency_overrides[get_database_session] = forbidden_request_session
+    application.dependency_overrides[get_code_agent] = lambda: MagicMock(spec=CodeAgent)
+    application.dependency_overrides[get_validation_agent] = lambda: MagicMock(spec=ValidationAgent)
+    application.dependency_overrides[get_supervisor_agent] = lambda: SupervisorAgent()
+    application.dependency_overrides[get_langgraph_checkpointer] = lambda: InMemorySaver()
+
+    @application.get("/workflow")
+    async def endpoint(coordinator: Annotated[ModuleWorkflowCoordinator, Depends(get_module_workflow_coordinator)]):
+        repository = coordinator.run_service.repository
+        selection_repository = coordinator.selection_service.paper_selection_repository
+        assert repository.session_factory is api_dependencies.async_session_factory
+        assert selection_repository.session_factory is api_dependencies.async_session_factory
+        return {"ok": True}
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
+            return await client.get("/workflow")
+
+    assert asyncio.run(exercise()).json() == {"ok": True}

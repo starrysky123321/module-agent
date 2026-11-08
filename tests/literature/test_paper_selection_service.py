@@ -18,6 +18,8 @@ from module_agent.literature.domain.repositories.run import LiteratureRunReposit
 from module_agent.literature.domain.repositories.selection import PaperSelectionRepository
 from module_agent.workflow.domain import PaperSelectionRequest
 from module_agent.literature.application.selection import PaperSelectionService
+from module_agent.literature.domain.integrity import PaperIntegrity, PaperIntegrityStatus
+from module_agent.shared.exceptions import UnsafePaperSelectionError
 
 
 def _run(status: LiteratureRunStatus) -> LiteratureRun:
@@ -77,6 +79,15 @@ def test_confirmation_saves_ids_in_requested_order() -> None:
     assert selection.code_requirements == "Use PyTorch"
     assert selection.selected_at is None
     run_repository.get_run_papers.assert_awaited_once_with(7)
+
+
+def test_retracted_paper_cannot_be_selected_through_direct_api_service() -> None:
+    service, runs, selections = _service()
+    runs.get_by_id.return_value = _run(LiteratureRunStatus.COMPLETED)
+    runs.get_run_papers.return_value = [LiteratureRunPaper(paper_id=42,position=0,integrity=PaperIntegrity(status=PaperIntegrityStatus.RETRACTED))]
+    with pytest.raises(UnsafePaperSelectionError):
+        asyncio.run(service.confirm_selection(7,PaperSelectionRequest(selected_paper_ids=[42])))
+    selections.create.assert_not_awaited()
 
 
 def test_confirmation_rejects_paper_from_another_run() -> None:

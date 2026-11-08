@@ -2,6 +2,7 @@ import sys
 from typing import Any
 
 from loguru import logger as loguru_logger
+from module_agent.shared.redaction import redact_sensitive_text
 
 from module_agent.shared.context import (
     agent_run_id_ctx_var,
@@ -24,7 +25,9 @@ def _configure_logger():
     loguru_logger.remove()
     patched_logger = loguru_logger.patch(_inject_context)
     patched_logger.add(
-        sys.stderr,
+        _redacted_sink,
+        diagnose=False,
+        backtrace=False,
         level="INFO",
         format=(
             "{time:YYYY-MM-DD HH:mm:ss} | "
@@ -37,6 +40,10 @@ def _configure_logger():
         ),
     )
     return patched_logger
+
+
+def _redacted_sink(message: Any) -> None:
+    sys.stderr.write(redact_sensitive_text(str(message)))
 
 
 logger = _configure_logger()

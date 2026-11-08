@@ -8,6 +8,7 @@ from sqlalchemy import text
 from module_agent.shared.config import app_settings
 from module_agent.shared.database import database_engine
 from module_agent.shared.cache.redis import redis_client
+from module_agent.shared.checkpoint.postgres import postgres_checkpointer_manager
 from module_agent.shared.logging import logger
 from module_agent.shared.messaging.rabbitmq import (
     rabbitmq_connection_manager,
@@ -62,6 +63,11 @@ async def _check_rabbitmq() -> None:
     _ = await rabbitmq_connection_manager.get_connection()
 
 
+async def _check_checkpoint() -> None:
+    """Detect stale connections and missing checkpoint schema, not just SQLAlchemy."""
+    await postgres_checkpointer_manager.check_health()
+
+
 async def _run_probe(
     name: str,
     probe: Callable[[], Awaitable[None]],
@@ -83,6 +89,7 @@ async def _run_probe(
 
 _DEPENDENCY_PROBES: dict[str, Callable[[], Awaitable[None]]] = {
     "postgres": _check_database,
+    "checkpoint": _check_checkpoint,
     "redis": _check_redis,
     "rabbitmq": _check_rabbitmq,
 }

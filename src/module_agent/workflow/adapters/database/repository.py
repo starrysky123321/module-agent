@@ -35,6 +35,7 @@ class SqlAlchemyModuleWorkflowRunRepository:
             "trace_id": run.trace_id,
             "status": run.status.value,
             "deadline_at": run.deadline_at,
+            "selection_wait_started_at": run.selection_wait_started_at,
             "cancellation_requested_at": (
                 run.cancellation_requested_at
             ),
@@ -69,6 +70,7 @@ class SqlAlchemyModuleWorkflowRunRepository:
             trace_id=model.trace_id,
             status=ModuleWorkflowRunStatus(model.status),
             deadline_at=model.deadline_at,
+            selection_wait_started_at=model.selection_wait_started_at,
             cancellation_requested_at=(
                 model.cancellation_requested_at
             ),

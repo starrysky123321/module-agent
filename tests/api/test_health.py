@@ -1,5 +1,6 @@
 import asyncio
 import json
+from unittest.mock import AsyncMock
 
 from fastapi.responses import JSONResponse
 
@@ -45,3 +46,21 @@ def test_readiness_returns_503_without_leaking_exception(monkeypatch) -> None:
     assert payload["status"] == "not_ready"
     assert payload["dependencies"]["redis"] == "unavailable"
     assert "ConnectionError" not in result.body.decode()
+
+
+def test_default_readiness_includes_the_real_checkpoint_probe():
+    assert health_module._DEPENDENCY_PROBES["checkpoint"] is health_module._check_checkpoint
+
+
+def test_checkpoint_probe_uses_shared_manager(monkeypatch):
+    probe = AsyncMock()
+    monkeypatch.setattr(health_module.postgres_checkpointer_manager, "check_health", probe)
+    asyncio.run(health_module._check_checkpoint())
+    probe.assert_awaited_once_with()
+
+
+def test_checkpoint_failure_blocks_readiness_even_when_database_is_healthy(monkeypatch):
+    monkeypatch.setattr(health_module, "_DEPENDENCY_PROBES", {"postgres": _healthy, "checkpoint": _unhealthy})
+    response = asyncio.run(health_module.readiness())
+    assert response.status_code == 503
+    assert json.loads(response.body)["dependencies"] == {"postgres": "ok", "checkpoint": "unavailable"}

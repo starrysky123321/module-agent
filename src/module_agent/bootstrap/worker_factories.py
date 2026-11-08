@@ -1,4 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
+from module_agent.workflow.adapters.execution_control import WorkflowExecutionControl
+from module_agent.bootstrap.factories.integrity import build_paper_integrity_service
 from module_agent.literature.application.execution import LiteratureRunExecutor
 from module_agent.literature.adapters.sources.registry import LITERATURE_SOURCE_REGISTRY
 from module_agent.literature.application.search import LiteratureSearchService
@@ -37,8 +39,10 @@ from module_agent.validation.application.run import ValidationRunService
 from module_agent.validation.adapters.database.repositories.run import (
     TransactionalValidationRunRepository,
 )
-from module_agent.literature.adapters.database.repositories.selection import (
-    SqlAlchemyPaperSelectionRepository,
+from module_agent.literature.adapters.database.repositories.transactional import (
+    TransactionalLiteratureRunRepository,
+    TransactionalPaperRepository,
+    TransactionalPaperSelectionRepository,
 )
 from module_agent.shared.messaging.rabbitmq import (
     rabbitmq_connection_manager,
@@ -128,11 +132,12 @@ def build_literature_run_executor(
         relevance_scorer=relevance_scorer,
         paper_catalog_service=paper_catalog_service,
         method_extractor=method_extractor,
+        integrity_service=build_paper_integrity_service(),
     )
 
     run_service = build_literature_run_service(session)
 
-    return LiteratureRunExecutor(agent, run_service)
+    return LiteratureRunExecutor(agent, run_service, execution_control=WorkflowExecutionControl(ModuleWorkflowLifecycleService(TransactionalModuleWorkflowRunRepository(async_session_factory),default_timeout_seconds=app_settings.workflow_timeout_seconds)))
 
 
 
@@ -148,6 +153,7 @@ def _build_configured_code_agent() -> CodeAgent:
     """Build the shared Code Agent configuration used by workflow workers."""
     return build_code_agent(
         github_client=github_client_manager.get_client(),
+        llm_timeout_seconds=app_settings.qwen_call_timeout_seconds,
         github_token=app_settings.github_token,
         github_api_version=app_settings.github_api_version,
         qwen_client_manager=qwen_client_manager,
@@ -178,6 +184,7 @@ def build_code_run_service() -> CodeRunService:
         code_agent,
         TransactionalCodeRunRepository(async_session_factory),
         SqlAlchemyPaperCodeStatusWriter(async_session_factory),
+        execution_control=WorkflowExecutionControl(ModuleWorkflowLifecycleService(TransactionalModuleWorkflowRunRepository(async_session_factory),default_timeout_seconds=app_settings.workflow_timeout_seconds)),
     )
 
 
@@ -186,12 +193,11 @@ def build_module_workflow_coordinator(
     checkpointer: AsyncPostgresSaver,
 ) -> ModuleWorkflowCoordinator:
     """构建并返回目标对象。"""
-    run_service = build_literature_run_service(session)
+    # The caller's session is not kept checked out while graph nodes run.
+    run_service = LiteratureRunService(TransactionalLiteratureRunRepository(async_session_factory))
     selection_service = PaperSelectionService(
         literature_run_repository=run_service.repository,
-        paper_selection_repository=SqlAlchemyPaperSelectionRepository(
-            session
-        ),
+        paper_selection_repository=TransactionalPaperSelectionRepository(async_session_factory),
     )
     dispatcher = LiteratureRunDispatcher(
         run_service=run_service,
@@ -215,7 +221,7 @@ def build_module_workflow_coordinator(
         literature_dispatcher=dispatcher,
         code_agent=code_agent,
         code_input_loader=SelectedPaperCodeInputLoader(
-            paper_repository=SqlAlchemyPaperRepository(session),
+            paper_repository=TransactionalPaperRepository(async_session_factory),
             literature_run_repository=run_service.repository,
         ),
         validation_agent=validation_agent,
@@ -223,6 +229,7 @@ def build_module_workflow_coordinator(
             code_agent,
             TransactionalCodeRunRepository(async_session_factory),
             SqlAlchemyPaperCodeStatusWriter(async_session_factory),
+            execution_control=WorkflowExecutionControl(lifecycle_service),
         ),
         validation_run_service=ValidationRunService(
             validation_agent,

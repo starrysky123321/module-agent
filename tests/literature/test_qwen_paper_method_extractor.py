@@ -46,7 +46,7 @@ def paper(source_id: str = "W123") -> PaperSearchResult:
 
 
 def client_with_result(
-    parsed: PaperMethodExtractionResult | None,
+    parsed: PaperMethodExtractionResult | QwenMethodResponse | None,
 ) -> tuple[MagicMock, AsyncMock]:
     parse = AsyncMock()
     parse.return_value = MagicMock(
@@ -192,7 +192,7 @@ def test_extractor_rejects_missing_parsed_result() -> None:
         ],
     ],
 )
-def test_extractor_rejects_missing_unknown_or_duplicate_profile_ids(
+def test_extractor_downgrades_missing_unknown_or_duplicate_profile_ids(
     profiles: list[PaperMethodProfile],
 ) -> None:
     client, _ = client_with_result(
@@ -200,11 +200,16 @@ def test_extractor_rejects_missing_unknown_or_duplicate_profile_ids(
     )
     extractor = QwenPaperMethodExtractor(client, "qwen3.7-plus")
 
-    with pytest.raises(ValueError, match="do not match input papers"):
-        asyncio.run(extractor.extract_many(search_request(), [paper()]))
+    result = asyncio.run(extractor.extract_many(search_request(), [paper()]))
+
+    assert len(result.profiles) == 1
+    assert result.profiles[0].source_id == "W123"
+    assert result.profiles[0].confidence == 0
+    assert any(issue.code in {"missing_profile", "duplicate_profile"} for issue in result.issues)
+    assert all("W123" in issue.as_warning() for issue in result.issues if issue.fallback)
 
 
-def test_extractor_rejects_claims_without_evidence() -> None:
+def test_extractor_downgrades_claims_without_evidence() -> None:
     parsed = PaperMethodExtractionResult(
         profiles=[
             PaperMethodProfile(
@@ -218,8 +223,12 @@ def test_extractor_rejects_claims_without_evidence() -> None:
     client, _ = client_with_result(parsed)
     extractor = QwenPaperMethodExtractor(client, "qwen3.7-plus")
 
-    with pytest.raises(ValueError, match="claims without paper evidence"):
-        asyncio.run(extractor.extract_many(search_request(), [paper()]))
+    result = asyncio.run(extractor.extract_many(search_request(), [paper()]))
+
+    assert result.profiles[0].confidence == 0
+    assert result.issues[0].code == "claims_without_evidence"
+    assert "claims without paper evidence" in result.warnings[0]
+    assert "W123" in result.warnings[0]
 
 
 @pytest.mark.parametrize(
@@ -230,7 +239,7 @@ def test_extractor_rejects_claims_without_evidence() -> None:
         ("abstract", "   "),
     ],
 )
-def test_extractor_rejects_unverifiable_evidence(
+def test_extractor_downgrades_unverifiable_evidence(
     field: str,
     excerpt: str,
 ) -> None:
@@ -250,5 +259,79 @@ def test_extractor_rejects_unverifiable_evidence(
     client, _ = client_with_result(parsed)
     extractor = QwenPaperMethodExtractor(client, "qwen3.7-plus")
 
-    with pytest.raises(ValueError, match="not in the paper metadata"):
-        asyncio.run(extractor.extract_many(search_request(), [paper()]))
+    result = asyncio.run(extractor.extract_many(search_request(), [paper()]))
+
+    assert result.profiles[0].confidence == 0
+    assert result.issues[0].code == "evidence_not_in_metadata"
+    assert result.issues[0].evidence_field == field
+    assert "not in the paper metadata" in result.warnings[0]
+    assert "W123" in result.warnings[0]
+
+
+def grounded_profile(candidate: PaperSearchResult) -> dict:
+    return {
+        "source": candidate.source, "source_id": candidate.source_id,
+        "core_method": "adaptive propagation module", "confidence": 0.9,
+        "evidence": [{"field": "abstract", "excerpt": "adaptive propagation module"}],
+    }
+
+
+@pytest.mark.parametrize("fault", ["evidence", "schema", "missing", "duplicate"])
+def test_one_bad_profile_preserves_other_grounded_profiles_and_input_order(fault: str) -> None:
+    candidates = [paper("W1"), paper("W2"), paper("W3")]
+    raw = [grounded_profile(candidate) for candidate in reversed(candidates)]
+    if fault == "evidence":
+        raw[1]["evidence"] = [{"field": "abstract", "excerpt": "invented algorithm"}]
+    elif fault == "schema":
+        raw[1]["confidence"] = "not-a-confidence"
+    elif fault == "missing":
+        raw.pop(1)
+    else:
+        raw.append(raw[1].copy())
+    # The SDK envelope must accept an individual malformed item for local validation.
+    parsed = QwenMethodResponse.model_validate({"profiles": raw})
+    client, parse = client_with_result(parsed)
+    result = asyncio.run(QwenPaperMethodExtractor(client, "qwen-test").extract_many(search_request(), candidates))
+
+    parse.assert_awaited_once()
+    assert [profile.source_id for profile in result.profiles] == ["W1", "W2", "W3"]
+    assert [profile.confidence for profile in result.profiles] == [0.9, 0.0, 0.9]
+    assert result.profiles[0].evidence
+    assert result.profiles[2].evidence
+    assert len(result.issues) == 1
+    assert result.issues[0].source_id == "W2"
+    assert "W2" in result.warnings[0]
+
+
+def test_schema_failure_logs_field_and_identity_without_raw_model_content(method_logs: list[str]) -> None:
+    raw = grounded_profile(paper())
+    raw["confidence"] = "api_key=DO-NOT-LOG-THIS"
+    parsed = QwenMethodResponse.model_validate({"profiles": [raw]})
+    client, _ = client_with_result(parsed)
+    result = asyncio.run(QwenPaperMethodExtractor(client, "qwen-test").extract_many(search_request(), [paper()]))
+
+    logs = "".join(method_logs)
+    assert "W123" in logs
+    assert "invalid_profile_schema" in logs
+    assert "confidence: float_parsing" in result.issues[0].message
+    assert "DO-NOT-LOG-THIS" not in logs + json.dumps(result.model_dump())
+
+
+def test_unknown_extra_profile_does_not_replace_a_valid_input_profile() -> None:
+    extra = grounded_profile(paper("unrequested"))
+    client, _ = client_with_result(QwenMethodResponse.model_validate({
+        "profiles": [extra, grounded_profile(paper())],
+    }))
+    result = asyncio.run(QwenPaperMethodExtractor(client, "qwen-test").extract_many(search_request(), [paper()]))
+
+    assert result.profiles[0].confidence == 0.9
+    assert result.issues[0].code == "unexpected_profile"
+    assert result.issues[0].fallback is False
+
+
+def test_skip_validation_preserves_provider_schema_constraints() -> None:
+    schema = QwenMethodResponse.model_json_schema()
+    text = json.dumps(schema)
+    assert '"maximum": 1.0' in text
+    assert '"minimum": 0.0' in text
+    assert '"abstract"' in text

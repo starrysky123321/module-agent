@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Path, Response, status
 from typing import Annotated
 
 from module_agent.literature.application.agent import LiteratureAgent
@@ -26,7 +26,10 @@ from module_agent.workflow.domain import (
 from module_agent.workflow.coordinator import (
     ModuleWorkflowCoordinator,
 )
+from module_agent.api.resources import admit_requested_resource_budget
 from module_agent.bootstrap.api_dependencies import get_module_workflow_coordinator
+from module_agent.bootstrap.api_dependencies import get_task_deletion_service
+from module_agent.workflow.deletion import TaskDeletionService
 
 
 
@@ -34,6 +37,16 @@ literature_router = APIRouter(
     prefix="/literature",
     tags=["literature-agent"],
 )
+
+
+@literature_router.delete("/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_run(
+    run_id: Annotated[int, Path(gt=0)],
+    service: Annotated[TaskDeletionService, Depends(get_task_deletion_service)],
+) -> Response:
+    """删除任务、关联结果与恢复断点；正在执行的任务不可删除。"""
+    await service.delete(run_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @literature_router.post(
@@ -54,6 +67,7 @@ async def start_module_workflow(
         if "validation_policy" in request.model_fields_set
         else None
     )
+    await admit_requested_resource_budget(validation_policy)
     if (
         validation_policy is None
         and request.sandbox_options is None
@@ -193,6 +207,7 @@ async def start_paper_selection(
         if "validation_policy" in request.model_fields_set
         else None
     )
+    await admit_requested_resource_budget(validation_policy)
     if (
         validation_policy is None
         and request.sandbox_options is None

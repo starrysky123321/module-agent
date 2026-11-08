@@ -41,7 +41,7 @@ def test_run_service_factory_reuses_supplied_session() -> None:
     assert service.repository.session is session
 
 
-def test_module_workflow_coordinator_factory_reuses_session_and_checkpointer(
+def test_module_workflow_coordinator_factory_releases_sessions_and_reuses_checkpointer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -80,14 +80,14 @@ def test_module_workflow_coordinator_factory_reuses_session_and_checkpointer(
         checkpointer,
     )
 
-    assert coordinator.run_service.repository.session is session
+    assert coordinator.run_service.repository.session_factory is worker_factories.async_session_factory
     assert (
-        coordinator.selection_service.literature_run_repository.session
-        is session
+        coordinator.selection_service.literature_run_repository.session_factory
+        is worker_factories.async_session_factory
     )
     assert (
-        coordinator.selection_service.paper_selection_repository.session
-        is session
+        coordinator.selection_service.paper_selection_repository.session_factory
+        is worker_factories.async_session_factory
     )
     assert coordinator.workflow_service.graph.checkpointer is checkpointer
     get_github_client.assert_called_once_with()
@@ -125,6 +125,7 @@ def test_module_workflow_coordinator_factory_reuses_session_and_checkpointer(
             landing_page_max_bytes=(
                 worker_factories.app_settings.code_landing_page_max_bytes
             ),
+            llm_timeout_seconds=worker_factories.app_settings.qwen_call_timeout_seconds,
         )
     build_supervisor_agent.assert_called_once_with(
         mode=worker_factories.app_settings.supervisor_policy,

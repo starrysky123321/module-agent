@@ -1,9 +1,10 @@
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from aio_pika.abc import AbstractIncomingMessage
+from aio_pika.exceptions import ChannelNotFoundEntity
 
 from module_agent.literature.domain.events import LiteratureCompletedEvent
 from module_agent.shared.messaging.dead_letter_replay import (
@@ -118,6 +119,24 @@ def test_publish_failure_keeps_dead_letter_for_retry() -> None:
 
     message.reject.assert_awaited_once_with(requeue=True)
     message.ack.assert_not_awaited()
+
+
+def test_replayer_waits_until_live_queue_exists() -> None:
+    replayer = _replayer()
+    unavailable = ChannelNotFoundEntity(404, "queue not found")
+    replayer._consume = AsyncMock(
+        side_effect=[unavailable, asyncio.CancelledError()]
+    )
+
+    with patch(
+        "module_agent.shared.messaging.dead_letter_replay.asyncio.sleep",
+        new=AsyncMock(),
+    ) as sleep:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(replayer.run())
+
+    assert replayer._consume.await_count == 2
+    sleep.assert_awaited_once_with(1.0)
 
 
 def test_recovery_topology_has_delay_and_parking_queue() -> None:

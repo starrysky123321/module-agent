@@ -153,3 +153,45 @@ def test_deduplicate_papers_merges_transitively_and_preserves_group_order() -> N
 
 def test_deduplicate_papers_returns_empty_list_for_empty_input() -> None:
     assert deduplicate_papers(()) == []
+
+
+def test_dropedge_title_variants_and_version_urls_are_one_paper() -> None:
+    original = _paper(
+        source_id="W2996268457",
+        title="DropEdge: Towards Deep Graph Convolutional Networks on Node Classification",
+        doi="10.48550/arxiv.1907.10903",
+        abstract="Complete abstract",
+    )
+    revised = _paper(
+        source_id="W3180180626",
+        title="DropEdge: Towards the Very Deep Graph Convolutional Networks for Node Classification",
+        landing_page_url="https://arxiv.org/abs/1907.10903v2",
+    )
+    assert deduplicate_papers([original, revised]) == [original]
+
+
+@pytest.mark.parametrize("value", [
+    "https://arxiv.org/pdf/1907.10903v3.pdf",
+    "https://arxiv.org/html/1907.10903v2",
+    "https://doi.org/10.48550/arXiv.1907.10903",
+    "arXiv:1907.10903v2",
+])
+def test_arxiv_aliases_are_normalized(value: str) -> None:
+    from module_agent.literature.domain.normalization import normalize_arxiv_id
+    assert normalize_arxiv_id(value) == "1907.10903"
+
+
+def test_arxiv_legacy_id_is_normalized() -> None:
+    from module_agent.literature.domain.normalization import normalize_arxiv_id
+    assert normalize_arxiv_id("https://arxiv.org/abs/math.GT/0309136v2") == "math.gt/0309136"
+
+
+@pytest.mark.parametrize("value", [
+    "https://unrelated.test/abs/1907.10903",
+    "https://arxiv.org.evil.test/abs/1907.10903",
+    "https://publisher.test/?url=https://arxiv.org/abs/1907.10903",
+    "10.1109/1907.10903",
+])
+def test_unrelated_urls_do_not_supply_arxiv_identity(value: str) -> None:
+    from module_agent.literature.domain.normalization import normalize_arxiv_id
+    assert normalize_arxiv_id(value) is None

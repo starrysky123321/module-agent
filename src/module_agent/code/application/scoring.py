@@ -9,12 +9,19 @@ from module_agent.code.domain.repository import (
     RepositoryOrigin,
 )
 from module_agent.code.domain.request import CodePaperInput
+from module_agent.code.domain.github_links import (
+    declared_implementation_links,
+    repository_key,
+)
 
 
 TITLE_WEIGHT = 0.35
 DOI_WEIGHT = 0.55
 AUTHOR_WEIGHT = 0.15
 DIRECT_URL_WEIGHT = 0.95
+MENTION_URL_WEIGHT = 0.10
+UNCORROBORATED_LINK_MAX = 0.65
+IMPLEMENTATION_CLAIM_WEIGHT = 0.4
 MAX_KEYWORD_WEIGHT = 0.15
 ARCHIVED_PENALTY = 0.8
 
@@ -44,7 +51,18 @@ class RepositoryScoringService:
         candidate: RepositoryCandidate,
     ) -> RepositoryCandidate:
         """计算一个候选仓库的证据、来源和置信度。"""
-        evidence = list(candidate.evidence)
+        # 旧候选也可能带 0.95 的普通页面链接，必须在评分边界重新限权。
+        evidence = [
+            item.model_copy(update={"weight": min(item.weight, MENTION_URL_WEIGHT)})
+            if item.evidence_type is RepositoryEvidenceType.PAPER_URL
+            else item
+            for item in candidate.evidence
+            if item.evidence_type
+            not in {
+                RepositoryEvidenceType.IMPLEMENTATION_URL,
+                RepositoryEvidenceType.IMPLEMENTATION_CLAIM,
+            }
+        ]
         raw_text = "\n".join(
             value
             for value in (
@@ -57,11 +75,11 @@ class RepositoryScoringService:
         )
         normalized_text = _normalize_text(raw_text)
 
-        if _paper_links_repository(paper, candidate):
+        if _paper_declares_implementation(paper, candidate):
             evidence.append(
                 RepositoryEvidence(
-                    evidence_type=RepositoryEvidenceType.PAPER_URL,
-                    description="Paper metadata links directly to this repository",
+                    evidence_type=RepositoryEvidenceType.IMPLEMENTATION_URL,
+                    description="论文元数据明确声明此仓库为自身实现地址，非仅正文或网页提及",
                     weight=DIRECT_URL_WEIGHT,
                     source_url=candidate.repository_url,
                 )
@@ -85,6 +103,16 @@ class RepositoryScoringService:
                     evidence_type=RepositoryEvidenceType.TITLE,
                     description="Repository metadata or README contains the paper title",
                     weight=TITLE_WEIGHT,
+                    source_url=candidate.repository_url,
+                )
+            )
+
+        if _repository_claims_implementation(paper.title, candidate.readme_text or ""):
+            evidence.append(
+                RepositoryEvidence(
+                    evidence_type=RepositoryEvidenceType.IMPLEMENTATION_CLAIM,
+                    description="仓库 README 明确声称实现该论文；此证据不代表作者或官方身份",
+                    weight=IMPLEMENTATION_CLAIM_WEIGHT,
                     source_url=candidate.repository_url,
                 )
             )
@@ -120,7 +148,23 @@ class RepositoryScoringService:
             )
 
         evidence = _deduplicate_evidence(evidence)
-        confidence = min(1.0, sum(item.weight for item in evidence))
+        # 同一类链接出现在 PDF、落地页和摘要中，不是三份独立的身份佐证。
+        weights: dict[RepositoryEvidenceType, float] = {}
+        for item in evidence:
+            weights[item.evidence_type] = max(
+                weights.get(item.evidence_type, 0.0), item.weight
+            )
+        confidence = min(1.0, sum(weights.values()))
+        identity_types = {
+            RepositoryEvidenceType.TITLE,
+            RepositoryEvidenceType.DOI,
+            RepositoryEvidenceType.AUTHOR,
+        }
+        if (
+            RepositoryEvidenceType.IMPLEMENTATION_URL in weights
+            and not identity_types.intersection(weights)
+        ):
+            confidence = min(confidence, UNCORROBORATED_LINK_MAX)
         if candidate.archived:
             confidence *= ARCHIVED_PENALTY
         confidence = round(confidence, 4)
@@ -158,6 +202,21 @@ def _normalize_text(value: str) -> str:
     return " ".join(normalized.split())
 
 
+def _repository_claims_implementation(title: str, readme: str) -> bool:
+    """只接受近距离的自身实现声明，不把引用列表中的论文标题当实现。"""
+    text = _normalize_text(readme[:12000])
+    normalized_title = _normalize_text(title)
+    if not normalized_title:
+        return False
+    declaration = (
+        r"\bthis (?:is|repository (?:contains|provides|is)|repo (?:contains|provides|is)) "
+        r"(?:[a-z0-9]+ ){0,4}implementation (?:of|for) (?:the |our |paper |method |algorithm |titled )*"
+    )
+    return (
+        re.search(declaration + re.escape(normalized_title) + r"\b", text) is not None
+    )
+
+
 def _normalize_doi(value: str | None) -> str | None:
     """去掉 DOI URL 前缀并转成小写。"""
     if not value:
@@ -174,16 +233,21 @@ def _normalize_doi(value: str | None) -> str | None:
     return normalized
 
 
-def _paper_links_repository(
+def _paper_declares_implementation(
     paper: CodePaperInput,
     candidate: RepositoryCandidate,
 ) -> bool:
-    """判断论文元数据是否直接指向候选仓库。"""
-    if not paper.landing_page_url:
+    """严格比较仓库身份，不把 URL 子串和参考链接当成官方声明。"""
+    key = repository_key(str(candidate.repository_url))
+    if key is None:
         return False
-    paper_url = paper.landing_page_url.rstrip("/").casefold()
-    repository_url = str(candidate.repository_url).rstrip("/").casefold()
-    return paper_url == repository_url or repository_url in paper_url
+    direct = [paper.landing_page_url, *paper.supplementary_urls]
+    if any(url and repository_key(url) == key for url in direct):
+        return True
+    return any(
+        repository_key(url) == key
+        for url in declared_implementation_links(paper.abstract or "")
+    )
 
 
 def _owner_matches_author(owner_login: str, authors: Sequence[str]) -> bool:
@@ -249,12 +313,20 @@ def _classify_origin(
 ) -> RepositoryOrigin:
     """根据证据组合判断仓库归属。"""
     evidence_types = {item.evidence_type for item in evidence}
-    if RepositoryEvidenceType.PAPER_URL in evidence_types:
-        return RepositoryOrigin.OFFICIAL
     if (
-        RepositoryEvidenceType.AUTHOR in evidence_types
+        RepositoryEvidenceType.IMPLEMENTATION_URL in evidence_types
         and evidence_types
-        & {RepositoryEvidenceType.DOI, RepositoryEvidenceType.TITLE}
+        & {
+            RepositoryEvidenceType.DOI,
+            RepositoryEvidenceType.TITLE,
+            RepositoryEvidenceType.AUTHOR,
+        }
     ):
+        return RepositoryOrigin.OFFICIAL
+    if RepositoryEvidenceType.AUTHOR in evidence_types and evidence_types & {
+        RepositoryEvidenceType.DOI,
+        RepositoryEvidenceType.TITLE,
+    }:
         return RepositoryOrigin.AUTHOR
+    # 仓库自身声明只能支持实现关联，不能证明作者身份，也不能反向证明它属于第三方。
     return RepositoryOrigin.UNKNOWN

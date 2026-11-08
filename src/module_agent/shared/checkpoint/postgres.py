@@ -7,7 +7,9 @@ import logging
 from typing import TypeVar
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from psycopg import OperationalError
+from psycopg import AsyncConnection, OperationalError
+from psycopg.rows import DictRow, dict_row
+from psycopg_pool import AsyncConnectionPool
 
 from module_agent.shared.config import app_settings
 
@@ -21,6 +23,7 @@ class PostgresCheckpointerManager:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url.strip()
         self._checkpointer: AsyncPostgresSaver | None = None
+        self._pool: AsyncConnectionPool[AsyncConnection[DictRow]] | None = None
         self._exit_stack: AsyncExitStack | None = None
         self._lock = asyncio.Lock()
         self._logger = logging.getLogger(__name__)
@@ -81,21 +84,44 @@ class PostgresCheckpointerManager:
         async with self._lock:
             await self._close_locked(ignore_errors=False)
 
+    async def check_health(self) -> None:
+        """Probe the same pool and schema used by compiled workflows, read-only."""
+        if self._pool is None:
+            raise RuntimeError("Checkpoint pool is not started")
+        async with self._pool.connection() as connection:
+            await connection.execute("SELECT 1 FROM checkpoints LIMIT 0")
+
     async def _start_locked(self) -> None:
         stack = AsyncExitStack()
         try:
-            saver = await stack.enter_async_context(
-                AsyncPostgresSaver.from_conn_string(self._database_url)
+            pool = await stack.enter_async_context(
+                AsyncConnectionPool[AsyncConnection[DictRow]](
+                    self._database_url,
+                    min_size=1,
+                    max_size=5,
+                    timeout=3,
+                    open=False,
+                    kwargs={
+                        "autocommit": True,
+                        "prepare_threshold": 0,
+                        "row_factory": dict_row,
+                    },
+                    check=AsyncConnectionPool[AsyncConnection[DictRow]].check_connection,
+                )
             )
-        except Exception:
+            await pool.wait(timeout=5)
+            saver = AsyncPostgresSaver(pool)
+        except BaseException:
             await stack.aclose()
             raise
         self._checkpointer = saver
+        self._pool = pool
         self._exit_stack = stack
 
     async def _close_locked(self, *, ignore_errors: bool) -> None:
         stack = self._exit_stack
         self._checkpointer = None
+        self._pool = None
         self._exit_stack = None
         if stack is None:
             return

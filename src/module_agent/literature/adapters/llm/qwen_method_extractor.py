@@ -1,14 +1,17 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SkipValidation, ValidationError
 
 from module_agent.literature.domain.search import PaperSearchResult, SearchRequest
 from module_agent.literature.domain.method import (
     PaperMethodExtractionResult,
     PaperMethodProfile,
+    PaperMethodExtractionError,
+    PaperMethodExtractionIssue,
 )
+from module_agent.shared.logging import logger
 from module_agent.shared.llm.usage import (
     capture_completion_usage,
     clear_llm_token_usage,
@@ -22,7 +25,8 @@ class QwenMethodResponse(BaseModel):
     """The model can report paper claims, not runtime measurements."""
 
     # 论文方法画像列表。
-    profiles: list[PaperMethodProfile] = Field(default_factory=list)
+    # Keep the provider's full schema, but validate each returned item separately.
+    profiles: list[SkipValidation[PaperMethodProfile]] = Field(default_factory=list)
     # 不阻断流程的警告列表。
     warnings: list[str] = Field(default_factory=list)
 
@@ -34,6 +38,9 @@ source and source_id exactly. Use the user's request only to understand which
 aspects of the method matter; do not use it as evidence about the paper.
 
 Rules:
+- Write descriptive fields (research_problem, module_type, core_method, inputs,
+  outputs and explanation text) in Simplified Chinese. Keep source identifiers,
+  code identifiers and evidence excerpts exactly as supplied, without translation.
 - Base every claim solely on that paper's supplied title and abstract.
 - Use null or an empty list when the metadata does not establish a field.
 - Do not infer algorithms, modules, inputs, outputs, or tasks that are not stated.
@@ -110,33 +117,71 @@ class QwenPaperMethodExtractor:
 
         result = completion.choices[0].message.parsed
         if result is None:
-            raise ValueError("Qwen returned no parsed method extraction result")
+            raise PaperMethodExtractionError(
+                "no_parsed_result", "Qwen returned no parsed method extraction result"
+            )
 
-        domain_result = PaperMethodExtractionResult(profiles=result.profiles)
-        self._validate_result(papers, domain_result)
-        return domain_result
+        return self._validate_result(papers, result.profiles)
 
     @staticmethod
     def _validate_result(
         papers: Sequence[PaperSearchResult],
-        result: PaperMethodExtractionResult,
-    ) -> None:
-        papers_by_identity = {
-            (paper.source, paper.source_id): paper for paper in papers
-        }
-        actual_ids = [
-            (profile.source, profile.source_id) for profile in result.profiles
-        ]
-        if (
-            len(actual_ids) != len(papers_by_identity)
-            or len(set(actual_ids)) != len(actual_ids)
-            or set(actual_ids) != set(papers_by_identity)
-        ):
-            raise ValueError("Qwen method profiles do not match input papers")
+        raw_profiles: Sequence[object],
+    ) -> PaperMethodExtractionResult:
+        """Keep grounded items and downgrade only their malformed/missing peers."""
+        expected = {(paper.source, paper.source_id) for paper in papers}
+        grouped: dict[tuple[str, str], list[object]] = {}
+        profiles: list[PaperMethodProfile] = []
+        issues: list[PaperMethodExtractionIssue] = []
 
-        for profile in result.profiles:
-            paper = papers_by_identity[(profile.source, profile.source_id)]
-            QwenPaperMethodExtractor._validate_evidence(paper, profile)
+        for index, raw in enumerate(raw_profiles):
+            data = raw.model_dump(mode="python") if isinstance(raw, PaperMethodProfile) else raw
+            source = data.get("source") if isinstance(data, Mapping) else None
+            source_id = data.get("source_id") if isinstance(data, Mapping) else None
+            identity = (source, source_id) if isinstance(source, str) and isinstance(source_id, str) else None
+            if identity is None or identity not in expected:
+                issues.append(PaperMethodExtractionIssue(
+                    # Untrusted unmatched output is identified by position, not echoed.
+                    code="unexpected_profile",
+                    message=f"Returned profile at index {index} has no matching input paper identity",
+                    fallback=False,
+                ))
+                continue
+            grouped.setdefault(identity, []).append(data)
+
+        for paper in papers:
+            matches = grouped.get((paper.source, paper.source_id), [])
+            try:
+                if not matches:
+                    raise PaperMethodExtractionError("missing_profile", "Qwen did not return a profile for this input paper")
+                if len(matches) != 1:
+                    raise PaperMethodExtractionError("duplicate_profile", "Qwen returned multiple profiles for this input paper")
+                try:
+                    profile = PaperMethodProfile.model_validate(matches[0])
+                except ValidationError as exc:
+                    details = "; ".join(
+                        f'{".".join(str(part) for part in error["loc"])}: {error["type"]}'
+                        for error in exc.errors(include_input=False, include_context=False, include_url=False)[:3]
+                    )
+                    raise PaperMethodExtractionError("invalid_profile_schema", f"Profile fields failed validation ({details})") from exc
+                QwenPaperMethodExtractor._validate_evidence(paper, profile)
+            except PaperMethodExtractionError as exc:
+                issues.append(PaperMethodExtractionIssue(
+                    source=paper.source, source_id=paper.source_id,
+                    code=exc.code, message=str(exc), evidence_field=exc.evidence_field,
+                ))
+                profile = PaperMethodProfile(source=paper.source, source_id=paper.source_id, confidence=0.0)
+            profiles.append(profile)
+
+        for issue in issues:
+            logger.warning(
+                "method extraction issue | source={!r} source_id={!r} code={} evidence_field={} reason={} fallback={}",
+                issue.source, issue.source_id, issue.code, issue.evidence_field, issue.message, issue.fallback,
+            )
+        return PaperMethodExtractionResult(
+            profiles=profiles, issues=issues,
+            warnings=[issue.as_warning() for issue in issues],
+        )
 
     @staticmethod
     def _validate_evidence(
@@ -154,11 +199,11 @@ class QwenPaperMethodExtractor:
             )
         )
         if has_claims and not profile.evidence:
-            raise ValueError(
-                "Qwen method profile has claims without paper evidence"
+            raise PaperMethodExtractionError(
+                "claims_without_evidence", "Qwen method profile has claims without paper evidence"
             )
 
-        for evidence in profile.evidence:
+        for index, evidence in enumerate(profile.evidence):
             source_text = (
                 paper.title
                 if evidence.field == "title"
@@ -166,6 +211,8 @@ class QwenPaperMethodExtractor:
             )
             excerpt = evidence.excerpt.strip()
             if not excerpt or excerpt.casefold() not in source_text.casefold():
-                raise ValueError(
-                    "Qwen method profile evidence is not in the paper metadata"
+                raise PaperMethodExtractionError(
+                    "evidence_not_in_metadata",
+                    f"Evidence excerpt {index} is not in the paper metadata field {evidence.field}",
+                    evidence_field=evidence.field,
                 )

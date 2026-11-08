@@ -157,6 +157,8 @@ class LiteratureRunPaperModel(Base):
         JSONB,
         nullable=True,
     )
+    # 本次推荐的撤稿核验快照，历史任务为空，不追溯伪造核验结果。
+    integrity: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
 
 
     # 所属的任务运行记录。

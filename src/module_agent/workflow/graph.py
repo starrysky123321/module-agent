@@ -430,6 +430,9 @@ class ModuleBuildWorkflow:
                 literature_run_id=literature_run_id,
                 papers=papers,
                 code_requirements=state.get("code_requirements"),
+                workspace_limit_mb=ValidationPolicy.model_validate(
+                    state.get("validation_policy", {})
+                ).workspace_limit_mb,
             )
 
             if self.code_job_queue is not None:

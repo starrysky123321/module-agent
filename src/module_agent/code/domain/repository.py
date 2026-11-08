@@ -26,8 +26,12 @@ class RepositoryOrigin(StrEnum):
 class RepositoryEvidenceType(StrEnum):
     """用于判断仓库可信度的证据类型。"""
 
-    # 论文页面或正文直接给出的仓库链接。
+    # 论文页面或正文提及的仓库，不代表它是当前论文的实现。
     PAPER_URL = "paper_url"
+    # 论文明确声明的自身实现地址，仍需仓库身份佐证。
+    IMPLEMENTATION_URL = "implementation_url"
+    # README 明确声称实现当前论文，但这不证明作者或官方归属。
+    IMPLEMENTATION_CLAIM = "implementation_claim"
     # 仓库内容包含论文 DOI。
     DOI = "doi"
     # 仓库内容包含完整论文标题。

@@ -35,6 +35,8 @@ class ModuleWorkflowRun(BaseModel):
     status: ModuleWorkflowRunStatus
     # 任务截止时间。
     deadline_at: datetime
+    # 人工选论文时暂停执行计时的起点。
+    selection_wait_started_at: datetime | None = None
     # 用户请求取消的时间。
     cancellation_requested_at: datetime | None = None
     # 记录创建时间。
@@ -51,6 +53,7 @@ class ModuleWorkflowRun(BaseModel):
         """校验状态与生命周期时间是否一致。"""
         for name in (
             "deadline_at",
+            "selection_wait_started_at",
             "cancellation_requested_at",
             "created_at",
             "updated_at",
@@ -59,6 +62,9 @@ class ModuleWorkflowRun(BaseModel):
             value = getattr(self, name)
             if value is not None and value.utcoffset() is None:
                 raise ValueError(f"{name} must include a timezone")
+
+        if self.selection_wait_started_at is not None and self.status is not ModuleWorkflowRunStatus.WAITING_FOR_SELECTION:
+            raise ValueError("Only paper selection can pause the execution deadline")
 
         terminal = self.status in {
             ModuleWorkflowRunStatus.COMPLETED,

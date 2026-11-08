@@ -76,6 +76,19 @@ class InvalidPaperSelectionError(AppException):
         )
         
 
+class UnsafePaperSelectionError(AppException):
+    """已知撤稿论文和撤稿声明不能进入代码生成。"""
+    def __init__(self, run_id: int, paper_ids: list[int]) -> None:
+        self.run_id = run_id
+        self.paper_ids = list(paper_ids)
+        super().__init__(
+            message=f"论文 {self.paper_ids} 已有撤稿或撤稿声明标记，不能进入代码阶段。",
+            code="unsafe_paper_selection",
+            status_code=422,
+            details={"run_id":run_id,"paper_ids":self.paper_ids},
+        )
+
+
 class WorkflowAlreadyProgressedError(AppException):
     """表示该业务场景的异常。"""
     def __init__(self, run_id: int) -> None:

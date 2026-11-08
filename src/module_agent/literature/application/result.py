@@ -43,6 +43,7 @@ class LiteratureResultService:
                 relevance_reason=run_paper.relevance_reason,
                 matched_terms=run_paper.matched_terms,
                 method_profile=run_paper.method_profile,
+                integrity=run_paper.integrity,
             )
             for run_paper in run_papers
             if run_paper.paper_id in papers_by_id

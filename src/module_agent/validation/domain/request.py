@@ -31,12 +31,36 @@ class ValidationPolicy(BaseModel):
     cpu_limit: Annotated[float, Field(gt=0.0, le=8.0)] = 1.0
     # 沙箱需要的计算资源；GPU 必须由 GPU 节点提供。
     compute_target: ComputeTarget = ComputeTarget.CPU
+    # 此任务全部论文产物的总空间预算，MiB；采用监测式限额。
+    workspace_limit_mb: Annotated[int, Field(ge=128, le=65536)] | None = None
+    # 沙箱 /tmp 的硬上限，实际使用量仍计入容器内存。
+    temporary_storage_mb: Annotated[int, Field(ge=16, le=16384)] = 512
+    # 明确选择的 NVIDIA GPU UUID；空列表保留旧 GPU API 的行为。
+    gpu_device_ids: Annotated[list[str], Field(max_length=8)] = Field(default_factory=list)
+
+    @field_validator("gpu_device_ids")
+    @classmethod
+    def validate_gpu_device_ids(cls, values: list[str]) -> list[str]:
+        """Only accept GPU UUIDs, never arbitrary Docker CLI arguments."""
+        import re
+
+        if len(set(values)) != len(values) or any(
+            not re.fullmatch(r"GPU-[a-zA-Z0-9-]{1,100}", value)
+            for value in values
+        ):
+            raise ValueError("GPU devices must be unique NVIDIA GPU UUIDs")
+        return values
 
     @model_validator(mode="after")
     def reject_network_for_static_validation(self) -> "ValidationPolicy":
         """拒绝不符合约束的输入。"""
         if self.mode is ValidationMode.STATIC and self.allow_network:
             raise ValueError("Static validation cannot enable network access")
+        if self.gpu_device_ids and (
+            self.compute_target is not ComputeTarget.GPU
+            or self.mode is not ValidationMode.SANDBOX
+        ):
+            raise ValueError("GPU device selection requires GPU sandbox mode")
         return self
 
 

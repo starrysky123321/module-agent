@@ -4,7 +4,10 @@ import httpx
 import pytest
 
 import module_agent.code.adapters.paper_links as paper_links
-from module_agent.code.adapters.paper_links import PaperLinkRepositorySearcher
+from module_agent.code.adapters.paper_links import (
+    PaperLinkRepositorySearcher,
+    extract_article_github_links,
+)
 from module_agent.code.domain.request import CodePaperInput
 
 
@@ -36,9 +39,7 @@ def test_paper_link_searcher_reads_landing_and_direct_supplementary_links(
                     source_id="W1",
                     title="Example",
                     landing_page_url="https://papers.test/project",
-                    supplementary_urls=[
-                        "https://github.com/bob/supplement.git"
-                    ],
+                    supplementary_urls=["https://github.com/bob/supplement.git"],
                 )
             )
 
@@ -71,3 +72,13 @@ def test_paper_link_searcher_rejects_invalid_limit(limit: int) -> None:
                 )
 
     asyncio.run(run())
+
+
+def test_publisher_navigation_and_thesaurus_footer_are_excluded() -> None:
+    html = """
+    <nav><a href="https://github.com/publisher/site">Publisher</a></nav>
+    <article><a href="https://github.com/alice/mnist">Code</a></article>
+    <footer><a href="https://github.com/PLOS/plos-thesaurus">Subject areas</a></footer>
+    <script>var code = 'https://github.com/publisher/scripts'</script>
+    """
+    assert extract_article_github_links(html) == ["https://github.com/alice/mnist"]

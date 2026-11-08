@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from collections.abc import Sequence
 
 from openai import AsyncOpenAI
@@ -16,6 +17,7 @@ from module_agent.shared.llm.usage import (
     capture_completion_usage,
     clear_llm_token_usage,
 )
+from module_agent.literature.application.relevance import RuleBasedPaperRelevanceScorer
 
 
 class QwenRelevanceResponse(BaseModel):
@@ -44,6 +46,7 @@ SYSTEM_PROMPT = """
   - 1.0: the user's problem is a central focus of the paper
 
   Requirements:
+  - Write every human-readable reason in Simplified Chinese.
   - Judge only from the provided title and abstract.
   - Do not treat generic terms as strong evidence.
   - Do not invent information missing from the paper
@@ -134,7 +137,24 @@ class QwenPaperRelevanceScorer:
             )
 
         domain_result = PaperRelevanceResult(assessments=result.assessments)
-        self._validate_result(domain_result, papers)
+        try:
+            self._validate_result(domain_result, papers)
+        except ValueError:
+            expected={(paper.source,paper.source_id) for paper in papers}
+            if len(expected)!=len(papers):
+                raise
+            counts=Counter((a.source,a.source_id) for a in result.assessments)
+            valid={(a.source,a.source_id):a for a in result.assessments if (a.source,a.source_id) in expected and counts[(a.source,a.source_id)]==1}
+            if not valid:
+                raise
+            missing=[paper for paper in papers if (paper.source,paper.source_id) not in valid]
+            fallback=await RuleBasedPaperRelevanceScorer().score_many(request,search_queries,missing)
+            valid.update({(a.source,a.source_id):a for a in fallback.assessments})
+            domain_result=PaperRelevanceResult(
+                assessments=[valid[(paper.source,paper.source_id)] for paper in papers],
+                warnings=[f"模型相关性评分有缺失或冲突，{len(missing)} 篇使用规则补齐；无法对应输入的条目已丢弃。"],
+                used_rule_fallback=bool(missing),
+            )
 
         return domain_result
 

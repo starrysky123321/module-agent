@@ -136,6 +136,12 @@ class ModuleWorkflowService:
 
         if not snapshot.interrupts:
             raise WorkflowNotWaitingForSelectionError(run_id)
+
+        # Resume the execution clock before any graph node (including code)
+        # runs; otherwise node-level timeout checks would still see human wait.
+        if self.lifecycle_service is not None:
+            await self.lifecycle_service.set_status(run_id, ModuleWorkflowRunStatus.RUNNING)
+            await self._ensure_active(run_id, "resume paper selection")
                 
         result = await self._invoke_graph(
             run_id,
@@ -341,6 +347,15 @@ class ModuleWorkflowService:
             ValidationReport.model_validate(report)
             for report in raw_reports
         ]
+
+    async def get_resource_policy(self, run_id: int) -> ValidationPolicy | None:
+        """Read the durable resource budget without changing a running graph."""
+        validate_run_id(run_id)
+        if self.lifecycle_service is not None:
+            await self.lifecycle_service.get(run_id)
+        snapshot = await self.graph.aget_state(workflow_config(run_id))
+        raw = snapshot.values.get("validation_policy")
+        return ValidationPolicy.model_validate(raw) if raw is not None else None
 
 
     async def get_result(

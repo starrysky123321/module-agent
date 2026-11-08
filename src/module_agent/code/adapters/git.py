@@ -2,6 +2,8 @@ from pathlib import Path
 import asyncio
 import shutil
 import tempfile
+import os
+import signal
 
 from module_agent.code.domain.artifact import RepositoryCheckout
 
@@ -32,6 +34,7 @@ class GitRepositoryFetcher:
             cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=os.name == "posix",
         )
         
         try:
@@ -40,12 +43,17 @@ class GitRepositoryFetcher:
                         timeout=self.timeout_seconds,
                     )
         except TimeoutError as exc:
-            subprocess.kill()
+            self._kill_process_group(subprocess)
             await subprocess.communicate()
             raise GitCommandError(
                 f"Git command timed out after "
                 f"{self.timeout_seconds} seconds"
             ) from exc
+        except BaseException:
+            # Workspace-budget cancellation must also terminate the clone.
+            self._kill_process_group(subprocess)
+            await subprocess.communicate()
+            raise
             
         error_message = stderr.decode("utf-8", errors="replace").strip()
         
@@ -55,6 +63,17 @@ class GitRepositoryFetcher:
             )
         
         return stdout.decode("utf-8", errors="replace").strip()
+
+    @staticmethod
+    def _kill_process_group(process: asyncio.subprocess.Process) -> None:
+        """Terminate clone helpers as well as the Git parent on cancellation."""
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            elif process.returncode is None:
+                process.kill()
+        except ProcessLookupError:
+            pass
     
     
     def _validate_fetch_request(self, candidate: RepositoryCandidate, destination: Path) -> Path:

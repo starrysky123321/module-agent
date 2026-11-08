@@ -1,9 +1,11 @@
 from collections.abc import Sequence
 
 from module_agent.literature.domain.search import PaperSearchResult
+from module_agent.literature.domain.integrity import merge_integrity, title_integrity
 from module_agent.literature.domain.normalization import (
     normalize_doi,
     normalize_title,
+    normalize_arxiv_id,
 )
 
 
@@ -42,7 +44,7 @@ def paper_preference_key(
 def deduplicate_papers(
     papers: Sequence[PaperSearchResult],
 ) -> list[PaperSearchResult]:
-    """Group papers by DOI or normalized title and retain the best record."""
+    """按 DOI、标题或 arXiv 基础编号合并，保留较完整的发表记录。"""
 
     if not papers:
         return []
@@ -78,6 +80,15 @@ def deduplicate_papers(
             keys.append(("doi", normalized_doi.casefold()))
         if normalized_title:
             keys.append(("title", normalized_title))
+        for value in (
+            paper.doi,
+            paper.landing_page_url,
+            paper.pdf_url,
+            paper.source_id,
+        ):
+            arxiv_id = normalize_arxiv_id(value)
+            if arxiv_id:
+                keys.append(("arxiv", arxiv_id))
 
         for key in keys:
             owner = key_owner.get(key)
@@ -90,7 +101,18 @@ def deduplicate_papers(
     for index, paper in enumerate(papers):
         groups.setdefault(find(index), []).append(paper)
 
-    return [
-        max(group, key=paper_preference_key)
-        for _, group in sorted(groups.items())
-    ]
+    result = []
+    for _, group in sorted(groups.items()):
+        preferred = max(group, key=paper_preference_key)
+        facts = [
+            fact
+            for paper in group
+            for fact in (paper.integrity, title_integrity(paper.title, paper.source))
+            if fact is not None
+        ]
+        if facts:
+            preferred = preferred.model_copy(
+                update={"integrity": merge_integrity(*facts)}
+            )
+        result.append(preferred)
+    return result

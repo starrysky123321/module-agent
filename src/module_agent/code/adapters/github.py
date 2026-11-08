@@ -4,7 +4,10 @@ import httpx
 from pypdf.errors import PyPdfError
 
 from module_agent.code.adapters.paper_links import PaperLinkRepositorySearcher
-from module_agent.code.adapters.pdf_repository import PdfRepositorySearcher
+from module_agent.code.adapters.pdf_repository import (
+    PdfRepositorySearcher,
+    get_github_repository,
+)
 from module_agent.code.domain.errors import PdfDownloadError, PdfParseError
 from module_agent.code.domain.repository import (
     RepositoryCandidate,
@@ -12,6 +15,7 @@ from module_agent.code.domain.repository import (
     RepositoryEvidenceType,
 )
 from module_agent.code.domain.request import CodePaperInput
+from module_agent.code.domain.github_links import declared_implementation_links
 from module_agent.shared.logging import logger
 
 
@@ -62,30 +66,53 @@ class GitHubRepositorySearcher:
         """按论文标题搜索仓库，并为每个候选读取 README。"""
         if not 1 <= limit <= 100:
             raise ValueError("GitHub repository search limit must be between 1 and 100")
-                
 
-        response = await self.client.get(
-            "/search/repositories",
-            params={
-                "q": f'"{paper.title}" in:name,description,readme',
-                "per_page": limit,
-                "sort": "stars",
-                "order": "desc",
-            },
-            headers=self._headers(),
-        )
-        response.raise_for_status()
-
+        # 显式实现地址不应被 GitHub 全文标题检索或参考链接的排序淹没。
         candidates: list[RepositoryCandidate] = []
-        for item in response.json().get("items", []):
+        for url in declared_implementation_links(paper.abstract or "")[:limit]:
+            try:
+                item = await get_github_repository(
+                    self.client, url, headers=self._headers()
+                )
+                candidate = self._parse_candidate(item)
+                if candidate is not None:
+                    readme = await self._get_readme(candidate.full_name)
+                    candidates.append(
+                        candidate.model_copy(update={"readme_text": readme})
+                    )
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "Declared repository lookup failed ({})", type(exc).__name__
+                )
+
+        try:
+            response = await self.client.get(
+                "/search/repositories",
+                params={
+                    "q": f'"{paper.title}" in:name,description,readme',
+                    "per_page": limit,
+                    "sort": "stars",
+                    "order": "desc",
+                },
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            title_items = response.json().get("items", [])
+        except httpx.HTTPError:
+            if not candidates:
+                raise
+            logger.warning(
+                "Title repository search failed; retaining declared repositories"
+            )
+            title_items = []
+
+        for item in title_items:
             candidate = self._parse_candidate(item)
             if candidate is None:
                 continue
             readme = await self._get_readme(candidate.full_name)
-            candidates.append(
-                candidate.model_copy(update={"readme_text": readme})
-            )
-            
+            candidates.append(candidate.model_copy(update={"readme_text": readme}))
+
         if paper.pdf_url is not None:
             try:
                 repositories = await PdfRepositorySearcher(
@@ -118,14 +145,12 @@ class GitHubRepositorySearcher:
                 if candidate is None:
                     continue
                 readme = await self._get_readme(candidate.full_name)
-                
+
                 direct_evidence = RepositoryEvidence.model_validate(
                     {
                         "evidence_type": RepositoryEvidenceType.PAPER_URL,
-                        "description": (
-                            "Repository URL found in paper PDF"
-                        ),
-                        "weight": 0.95,
+                        "description": ("Repository URL found in paper PDF"),
+                        "weight": 0.10,
                         "source_url": paper.pdf_url,
                     }
                 )
@@ -150,8 +175,7 @@ class GitHubRepositorySearcher:
                 ).search_github_links(paper, limit=limit)
             except (httpx.HTTPError, PdfDownloadError) as exc:
                 logger.warning(
-                    "Paper page repository discovery failed for paper {} "
-                    "({}): {}",
+                    "Paper page repository discovery failed for paper {} ({}): {}",
                     paper.source_id,
                     type(exc).__name__,
                     str(exc),
@@ -170,7 +194,7 @@ class GitHubRepositorySearcher:
                             "Repository URL found on a paper or "
                             "supplementary-material page"
                         ),
-                        "weight": 0.95,
+                        "weight": 0.10,
                         "source_url": source_url,
                     }
                 )
@@ -206,9 +230,7 @@ class GitHubRepositorySearcher:
 
             unique[key] = existing.model_copy(
                 update={
-                    "readme_text": (
-                        existing.readme_text or candidate.readme_text
-                    ),
+                    "readme_text": (existing.readme_text or candidate.readme_text),
                     "evidence": evidence,
                 }
             )
@@ -217,16 +239,17 @@ class GitHubRepositorySearcher:
 
     async def _get_readme(self, full_name: str) -> str | None:
         """读取仓库 README；不存在时返回 None。"""
-        response = await self.client.get(
-            f"/repos/{full_name}/readme",
-            headers={
-                **self._headers(),
-                "Accept": "application/vnd.github.raw+json",
-            },
-        )
-        if response.status_code == 404:
+        try:
+            response = await self.client.get(
+                f"/repos/{full_name}/readme",
+                headers={**self._headers(), "Accept": "application/vnd.github.raw+json"},
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            logger.warning("Repository README unavailable | repository={} error_type={}",full_name,type(error).__name__)
             return None
-        response.raise_for_status()
         return response.text
 
     def _headers(self) -> dict[str, str]:
@@ -254,9 +277,7 @@ class GitHubRepositorySearcher:
 
         license_data = item.get("license")
         license_spdx = (
-            license_data.get("spdx_id")
-            if isinstance(license_data, dict)
-            else None
+            license_data.get("spdx_id") if isinstance(license_data, dict) else None
         )
 
         return RepositoryCandidate(
@@ -269,8 +290,6 @@ class GitHubRepositorySearcher:
             default_branch=item.get("default_branch"),
             archived=bool(item.get("archived", False)),
             license_spdx=(
-                license_spdx
-                if license_spdx and license_spdx != "NOASSERTION"
-                else None
+                license_spdx if license_spdx and license_spdx != "NOASSERTION" else None
             ),
         )

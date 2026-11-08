@@ -50,6 +50,12 @@ class CodePaperInput(BaseModel):
         max_length=20,
     )
 
+    @field_validator("pdf_url", "landing_page_url", mode="before")
+    @classmethod
+    def empty_link_is_missing(cls, value: object) -> object:
+        """来源的空链接视为未提供，不发起无意义下载。"""
+        return value.strip() or None if isinstance(value, str) else value
+
 
 class CodeAgentRequest(BaseModel):
     """Workflow 传给 Code Agent 的请求。"""
@@ -60,6 +66,8 @@ class CodeAgentRequest(BaseModel):
     papers: Annotated[list[CodePaperInput], Field(min_length=1, max_length=20)]
     # 用户对代码产物的补充要求。
     code_requirements: Annotated[str, Field(max_length=5000)] | None = None
+    # 本次任务全部代码产物的空间预算，MiB；随消息与 CodeRun 持久化。
+    workspace_limit_mb: Annotated[int, Field(ge=128, le=65536)] | None = None
 
     @field_validator("code_requirements", mode="before")
     @classmethod

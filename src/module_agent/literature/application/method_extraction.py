@@ -3,8 +3,13 @@ from module_agent.literature.domain.search import PaperSearchResult, SearchReque
 from collections.abc import Sequence
 import asyncio
 import time
-from module_agent.literature.domain.method import PaperMethodProfile
+from module_agent.literature.domain.method import (
+    PaperMethodProfile, PaperMethodExtractionError, PaperMethodExtractionIssue,
+)
 from module_agent.literature.domain.llm_metric import LlmCallOutcome
+from module_agent.shared.logging import logger
+import traceback
+from pydantic import ValidationError
 from module_agent.literature.application.llm_observability import (
     record_llm_call,
     validate_timeout_seconds,
@@ -50,7 +55,8 @@ class FallbackPaperMethodExtractor:
                 item_count=len(papers),
                 started_at=started_at,
                 timeout_seconds=self.timeout_seconds,
-                outcome=LlmCallOutcome.SUCCESS,
+                outcome=LlmCallOutcome.FALLBACK if primary_result.issues else LlmCallOutcome.SUCCESS,
+                error_type="PaperMethodExtractionError" if primary_result.issues else None,
             )
             return primary_result.model_copy(
                 update={"llm_metrics": [*primary_result.llm_metrics, metric]}
@@ -73,7 +79,18 @@ class FallbackPaperMethodExtractor:
                 if self.timeout_seconds is not None
                 else None
             )
+            if isinstance(exc, PaperMethodExtractionError):
+                code, reason = exc.code, str(exc)
+            elif isinstance(exc, TimeoutError):
+                code, reason = "timeout", "Method extraction exceeded the configured timeout"
+            elif isinstance(exc, ValidationError):
+                code, reason = "invalid_response_schema", "The model response envelope failed schema validation"
+            else:
+                code, reason = "extractor_error", f"Method extractor failed with {type(exc).__name__}"
+            frames = traceback.extract_tb(exc.__traceback__)
+            location = f"{frames[-1].filename}:{frames[-1].lineno} ({frames[-1].name})" if frames else "unknown"
             profiles = []
+            issues = []
             for paper in papers:
                 profiles.append(
                     PaperMethodProfile(
@@ -82,11 +99,21 @@ class FallbackPaperMethodExtractor:
                         confidence=0.0,
                     )
                 )
+                issue = PaperMethodExtractionIssue(
+                    source=paper.source, source_id=paper.source_id,
+                    code=code, message=reason, error_type=type(exc).__name__,
+                )
+                issues.append(issue)
+                # Raw SDK exception strings can contain credentials or provider bodies.
+                logger.warning(
+                    "method extraction fallback | source={!r} source_id={!r} code={} error_type={} reason={} location={}",
+                    paper.source, paper.source_id, issue.code, issue.error_type, issue.message, location,
+                )
 
-            warnings=[f"Paper method extraction failed ({type(exc).__name__}); " "unknown profiles were used"]
             return PaperMethodExtractionResult(
                 profiles=profiles,
-                warnings=warnings,
+                issues=issues,
+                warnings=[issue.as_warning() for issue in issues],
                 llm_metrics=[metric] if metric is not None else [],
             )
 
@@ -117,6 +144,7 @@ class BatchedPaperMethodExtractor:
         profiles = []
         warnings = []
         llm_metrics = []
+        issues = []
         
         for start in range(0, len(papers), self.batch_size):
             end = min(start + self.batch_size, len(papers))
@@ -153,6 +181,7 @@ class BatchedPaperMethodExtractor:
             
             warnings.extend(result.warnings)
             llm_metrics.extend(result.llm_metrics)
+            issues.extend(result.issues)
         
         warnings = list(dict.fromkeys(warnings))
         
@@ -160,6 +189,7 @@ class BatchedPaperMethodExtractor:
             profiles=profiles,
             warnings=warnings,
             llm_metrics=llm_metrics,
+            issues=issues,
         )
             
             

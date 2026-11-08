@@ -103,6 +103,31 @@ def test_agent_returns_one_ordered_report_per_artifact() -> None:
     assert all(report.code_executed is False for report in reports)
 
 
+def test_budgeted_sandboxes_do_not_multiply_resources_across_papers() -> None:
+    class CountingRunner(FakeSandboxRunner):
+        active = 0
+        peak = 0
+
+        async def execute(self, request):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            try:
+                await asyncio.sleep(0.01)
+                return await super().execute(request)
+            finally:
+                self.active -= 1
+
+    runner = CountingRunner()
+    request = ValidationRequest(
+        literature_run_id=7,
+        artifacts=[repository_artifact(1), repository_artifact(2)],
+        policy=ValidationPolicy(mode=ValidationMode.SANDBOX, workspace_limit_mb=128),
+    )
+    reports = asyncio.run(agent(sandbox_runner=runner).run(request))
+    assert len(reports) == 2
+    assert runner.peak == 1
+
+
 def test_agent_runs_only_explicit_sandbox_checks() -> None:
     runner = FakeSandboxRunner()
     request = ValidationRequest(

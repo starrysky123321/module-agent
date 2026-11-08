@@ -2,12 +2,13 @@ from datetime import date
 from enum import StrEnum
 from typing import Annotated, Any, NotRequired, TypedDict
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 
 from module_agent.literature.domain.paper import Paper
 from module_agent.literature.domain.ranking import PaperRelevanceAssessment
 from module_agent.literature.domain.method import PaperMethodProfile
 from module_agent.literature.domain.llm_metric import LlmCallMetric
+from module_agent.literature.domain.integrity import PaperIntegrity
 
 
 class SourceSearchOutcome(StrEnum):
@@ -89,6 +90,14 @@ class PaperSearchResult(BaseModel):
     open_access_status: str | None = None
     # 论文被引用次数。
     cited_by_count: int = 0
+    # 此次检索的撤稿元数据快照；None 表示尚未核验。
+    integrity: PaperIntegrity | None = None
+
+    @field_validator("pdf_url", "landing_page_url", mode="before")
+    @classmethod
+    def empty_link_is_missing(cls, value: object) -> object:
+        """空链接表示来源未提供文件，而不是一次下载失败。"""
+        return value.strip() or None if isinstance(value, str) else value
 
 
 class SourceSearchMetric(BaseModel):

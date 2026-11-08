@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from module_agent.shared.config import AppSettings
 from module_agent.shared.logging import logger
+from module_agent.api.workbench import is_workbench_public_path
 
 
 _INCREMENT_WINDOW = """
@@ -96,6 +97,8 @@ def register_api_rate_limit_middleware(
 
 def _is_exempt(request: Request, settings: AppSettings) -> bool:
     """Keep operational probes and API discovery outside the quota."""
+    if is_workbench_public_path(request.url.path):
+        return True
     public_paths = {
         f"{settings.api_prefix}/health",
         f"{settings.api_prefix}/health/",

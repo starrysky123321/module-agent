@@ -4,6 +4,7 @@ from typing import Annotated
 from pydantic import BaseModel, Field, HttpUrl, StringConstraints, model_validator
 
 from module_agent.code.domain.repository import RepositoryEvidence
+from module_agent.shared.llm.metric import ModelCallMetric
 
 
 NonEmptyText = Annotated[
@@ -140,6 +141,8 @@ class CodeArtifact(BaseModel):
     implementation_generated: bool = False
     # 失败时的错误信息。
     error: str | None = None
+    # 该论文真实模型调用的耗时、结果与 provider 用量，不接受模型自行填写。
+    llm_metrics: list[ModelCallMetric] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_status_payload(self) -> "CodeArtifact":

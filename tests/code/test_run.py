@@ -35,6 +35,31 @@ def request() -> CodeAgentRequest:
     )
 
 
+@pytest.mark.parametrize("stop_before_start",[True,False])
+def test_cancellation_stops_agent_and_persists_cancelled_run(stop_before_start):
+    stopped=[]
+    async def slow(_):
+        try:
+            await asyncio.sleep(10)
+        finally:
+            stopped.append(True)
+    agent=AsyncMock(spec=CodeAgent)
+    agent.run.side_effect=slow
+    repository=AsyncMock(spec=CodeRunRepository)
+    repository.get_by_execution.return_value=None
+    async def save(run):
+        return run.model_copy(update={"id":3})
+    repository.save.side_effect=save
+    control=AsyncMock(side_effect=[False] if stop_before_start else [True,False])
+    service=CodeRunService(agent,repository,execution_control=control,control_poll_seconds=.02)
+    run=asyncio.run(service.execute(request(),attempt=1,trace_id=uuid4()))
+    assert run.status is CodeRunStatus.CANCELLED and run.finished_at
+    if stop_before_start:
+        agent.run.assert_not_awaited()
+    else:
+        assert stopped
+
+
 def artifact() -> CodeArtifact:
     return CodeArtifact(
         paper_id=51,

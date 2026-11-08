@@ -20,6 +20,7 @@ from module_agent.literature.domain.method import PaperMethodProfile
 from module_agent.literature.domain.llm_metric import LlmCallMetric, LlmCallOutcome
 from module_agent.literature.application.execution import LiteratureRunExecutor
 from module_agent.literature.application.run import LiteratureRunService
+from module_agent.shared.execution_control import ExecutionStopped
 
 
 def example_request() -> SearchRequest:
@@ -31,6 +32,19 @@ def example_request() -> SearchRequest:
         keywords=["GNN"],
         max_results=10,
     )
+
+
+def test_cancelled_workflow_never_starts_literature_model_calls() -> None:
+    agent=AsyncMock(spec=LiteratureAgent)
+    service=AsyncMock(spec=LiteratureRunService)
+    running=LiteratureRun(id=7,request=example_request(),status=LiteratureRunStatus.RUNNING)
+    service.get_run.return_value=running
+    executor=LiteratureRunExecutor(agent,service,execution_control=AsyncMock(return_value=False))
+    with pytest.raises(ExecutionStopped):
+        asyncio.run(executor.execute_started(running))
+    agent.run.assert_not_awaited()
+    service.cancel_run.assert_awaited_once_with(7)
+    service.fail_run.assert_not_awaited()
 
 
 def paper(paper_id: int | None) -> Paper:

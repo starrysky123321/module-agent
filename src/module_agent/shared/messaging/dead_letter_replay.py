@@ -1,5 +1,6 @@
 """Bounded RabbitMQ dead-letter replay for workflow completion events."""
 
+import asyncio
 from collections.abc import Callable
 import logging
 from typing import Any
@@ -12,12 +13,14 @@ from aio_pika.abc import (
     AbstractIncomingMessage,
     AbstractQueue,
 )
+from aio_pika.exceptions import ChannelNotFoundEntity
 
 from module_agent.shared.messaging.rabbitmq import RabbitMQConnectionManager
 
 
 REPLAY_COUNT_HEADER = "x-module-agent-replay-count"
 REPLAY_REASON_HEADER = "x-module-agent-park-reason"
+TOPOLOGY_RETRY_SECONDS = 1.0
 PayloadValidator = Callable[[bytes], object]
 
 
@@ -64,6 +67,18 @@ class RabbitMQDeadLetterReplayer:
 
     async def run(self) -> None:
         """Consume dead letters until the process is stopped."""
+        while True:
+            try:
+                await self._consume()
+            except ChannelNotFoundEntity:
+                self.logger.info(
+                    "Waiting for completion queue before starting recovery",
+                    extra={"live_queue": self.live_queue_name},
+                )
+                await asyncio.sleep(TOPOLOGY_RETRY_SECONDS)
+
+    async def _consume(self) -> None:
+        """Open a fresh channel and consume the configured dead-letter queue."""
         connection = await self.connection_manager.get_connection()
         async with connection.channel(publisher_confirms=True) as channel:
             await channel.set_qos(prefetch_count=1)

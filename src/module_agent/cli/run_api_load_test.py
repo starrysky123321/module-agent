@@ -25,20 +25,36 @@ class LoadTestConfig:
     timeout_seconds: float = 10.0
     max_error_rate: float = 0.01
     max_p95_ms: float = 1000.0
+    target_rps: float | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= self.concurrency <= 1000:
             raise ValueError("concurrency must be between 1 and 1000")
         if self.requests is not None and self.requests < 1:
             raise ValueError("requests must be positive")
-        if self.duration_seconds is not None and self.duration_seconds <= 0:
+        if self.duration_seconds is not None and (
+            not math.isfinite(self.duration_seconds) or self.duration_seconds <= 0
+        ):
             raise ValueError("duration_seconds must be positive")
         if self.requests is not None and self.duration_seconds is not None:
             raise ValueError("choose requests or duration_seconds, not both")
+        if self.requests is None and self.duration_seconds is None:
+            raise ValueError(
+                "choose requests or duration_seconds; an unbounded run is not allowed"
+            )
         if not 0 <= self.max_error_rate <= 1:
             raise ValueError("max_error_rate must be between 0 and 1")
-        if self.max_p95_ms <= 0 or self.timeout_seconds <= 0:
+        if (
+            not math.isfinite(self.max_p95_ms)
+            or not math.isfinite(self.timeout_seconds)
+            or self.max_p95_ms <= 0
+            or self.timeout_seconds <= 0
+        ):
             raise ValueError("timeouts and latency thresholds must be positive")
+        if self.target_rps is not None and (
+            not math.isfinite(self.target_rps) or self.target_rps <= 0
+        ):
+            raise ValueError("target_rps must be finite and positive")
 
 
 @dataclass
@@ -51,10 +67,13 @@ class LoadTestReport:
     transport_failures: int = 0
     elapsed_seconds: float = 0.0
     p95_ms: float = 0.0
+    p50_ms: float = 0.0
+    p99_ms: float = 0.0
     max_ms: float = 0.0
     requests_per_second: float = 0.0
     error_rate: float = 0.0
     passed: bool = False
+    status_counts: dict[int, int] = field(default_factory=dict)
     _latencies_ms: list[float] = field(default_factory=list, repr=False)
 
     def record_latency(self, latency_ms: float) -> None:
@@ -79,6 +98,8 @@ class LoadTestReport:
             ordered = sorted(self._latencies_ms)
             index = max(math.ceil(len(ordered) * 0.95) - 1, 0)
             self.p95_ms = ordered[index]
+            self.p50_ms = ordered[max(math.ceil(len(ordered) * 0.50) - 1, 0)]
+            self.p99_ms = ordered[max(math.ceil(len(ordered) * 0.99) - 1, 0)]
         self.passed = (
             self.total > 0
             and self.error_rate <= config.max_error_rate
@@ -100,14 +121,14 @@ async def run_load_test(
     """Exercise one idempotent GET endpoint with bounded concurrency."""
     report = LoadTestReport()
     next_request = 0
+    started = perf_counter()
     deadline = (
-        perf_counter() + config.duration_seconds
+        started + config.duration_seconds
         if config.duration_seconds is not None
         else None
     )
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     url = f"{config.base_url.rstrip('/')}/{config.path.lstrip('/')}"
-    started = perf_counter()
 
     async with httpx.AsyncClient(
         transport=transport,
@@ -130,7 +151,17 @@ async def run_load_test(
                     assert config.requests is not None
                     if next_request >= config.requests:
                         return
-                    next_request += 1
+                slot = next_request
+                next_request += 1
+                if config.target_rps is not None:
+                    scheduled = started + slot / config.target_rps
+                    if deadline is not None and scheduled >= deadline:
+                        return
+                    delay = scheduled - perf_counter()
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    if deadline is not None and perf_counter() >= deadline:
+                        return
 
                 request_started = perf_counter()
                 try:
@@ -138,19 +169,18 @@ async def run_load_test(
                 except httpx.HTTPError:
                     report.transport_failures += 1
                 else:
+                    report.status_counts[response.status_code] = (
+                        report.status_counts.get(response.status_code, 0) + 1
+                    )
                     if response.is_success:
                         report.succeeded += 1
                     else:
                         report.http_failures += 1
                 finally:
                     report.total += 1
-                    report.record_latency(
-                        (perf_counter() - request_started) * 1000
-                    )
+                    report.record_latency((perf_counter() - request_started) * 1000)
 
-        await asyncio.gather(
-            *(worker() for _ in range(config.concurrency))
-        )
+        await asyncio.gather(*(worker() for _ in range(config.concurrency)))
 
     report.finish(config, perf_counter() - started)
     return report
@@ -160,9 +190,7 @@ def _read_api_token() -> str:
     direct = os.getenv("API_AUTH_TOKEN", "").strip()
     secret_file = os.getenv("API_AUTH_TOKEN_FILE", "").strip()
     if direct and secret_file:
-        raise ValueError(
-            "configure only API_AUTH_TOKEN or API_AUTH_TOKEN_FILE"
-        )
+        raise ValueError("configure only API_AUTH_TOKEN or API_AUTH_TOKEN_FILE")
     if secret_file:
         return Path(secret_file).read_text(encoding="utf-8").strip()
     return direct
@@ -179,6 +207,11 @@ def _parse_args() -> LoadTestConfig:
     parser.add_argument("--timeout-seconds", type=float, default=10.0)
     parser.add_argument("--max-error-rate", type=float, default=0.01)
     parser.add_argument("--max-p95-ms", type=float, default=1000.0)
+    parser.add_argument(
+        "--target-rps",
+        type=float,
+        help="Global start-rate cap; omitted for closed-loop maximum load",
+    )
     args = parser.parse_args()
     requests = args.requests
     if requests is None and args.duration_seconds is None:
@@ -192,6 +225,7 @@ def _parse_args() -> LoadTestConfig:
         timeout_seconds=args.timeout_seconds,
         max_error_rate=args.max_error_rate,
         max_p95_ms=args.max_p95_ms,
+        target_rps=args.target_rps,
     )
 
 

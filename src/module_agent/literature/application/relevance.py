@@ -88,7 +88,7 @@ class RuleBasedPaperRelevanceScorer:
             return PaperRelevanceResult()
 
         # 没有规划查询时，退回topic和keywords
-        effective_queries = search_queries or [
+        effective_queries = list(dict.fromkeys([request.topic, *search_queries])) if search_queries else [
             request.topic,
             *request.keywords,
         ]
@@ -202,7 +202,8 @@ class FallbackPaperRelevanceScorer:
                 item_count=len(papers),
                 started_at=started_at,
                 timeout_seconds=self.timeout_seconds,
-                outcome=LlmCallOutcome.SUCCESS,
+                outcome=LlmCallOutcome.FALLBACK if primary_result.used_rule_fallback else LlmCallOutcome.SUCCESS,
+                error_type="PartialRelevanceResult" if primary_result.used_rule_fallback else None,
             )
             return primary_result.model_copy(
                 update={"llm_metrics": [*primary_result.llm_metrics, metric]}
@@ -245,6 +246,7 @@ class FallbackPaperRelevanceScorer:
             return fallback_result.model_copy(
                 update={
                     "warnings": list(dict.fromkeys(warnings)),
+                    "used_rule_fallback": True,
                     "llm_metrics": [
                         *fallback_result.llm_metrics,
                         *([metric] if metric is not None else []),
@@ -344,6 +346,7 @@ class ShortlistingPaperRelevanceScorer:
 
         return PaperRelevanceResult(
             assessments=merged_assessments,
+            used_rule_fallback=shortlist_result.used_rule_fallback,
             warnings=list(dict.fromkeys(warnings)),
             llm_metrics=[
                 *prefilter_result.llm_metrics,

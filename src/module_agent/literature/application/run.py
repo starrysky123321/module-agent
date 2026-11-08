@@ -1,5 +1,6 @@
 from module_agent.literature.domain.repositories.run import LiteratureRunRepository
 from module_agent.literature.domain.run import LiteratureRun
+from module_agent.shared.redaction import redact_sensitive_text
 from module_agent.literature.domain.search import SearchRequest
 from module_agent.literature.domain.search import SourceSearchMetric
 from module_agent.literature.domain.llm_metric import LlmCallMetric
@@ -58,7 +59,7 @@ class LiteratureRunService:
         run.status = LiteratureRunStatus.COMPLETED
         run.completed_at = datetime.now(timezone.utc)
         run.search_queries = search_queries
-        run.warnings = warnings
+        run.warnings = [redact_sensitive_text(warning) for warning in warnings]
         run.source_metrics = list(source_metrics or [])
         run.llm_metrics = list(llm_metrics or [])
         await self.repository.replace_papers(run_id, papers)

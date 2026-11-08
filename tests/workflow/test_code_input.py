@@ -9,6 +9,8 @@ from module_agent.literature.domain.recommendation import LiteratureRunPaper
 from module_agent.literature.domain.repositories.paper import PaperRepository
 from module_agent.literature.domain.repositories.run import LiteratureRunRepository
 from module_agent.workflow.code_input import SelectedPaperCodeInputLoader
+from module_agent.literature.domain.integrity import PaperIntegrity, PaperIntegrityStatus
+from module_agent.shared.exceptions import UnsafePaperSelectionError
 
 
 def make_paper(paper_id: int) -> Paper:
@@ -90,3 +92,11 @@ def test_loader_reports_all_missing_selected_papers() -> None:
 
     with pytest.raises(ValueError, match=r"missing paper ids: \[3, 4\]"):
         asyncio.run(loader.load(7, [2, 3, 4]))
+
+
+def test_loader_rejects_known_retraction_even_if_selection_was_already_saved() -> None:
+    loader,papers,runs=make_loader()
+    runs.get_run_papers.return_value=[LiteratureRunPaper(paper_id=1,position=0,integrity=PaperIntegrity(status=PaperIntegrityStatus.RETRACTED))]
+    papers.get_by_ids.return_value=[make_paper(1)]
+    with pytest.raises(UnsafePaperSelectionError):
+        asyncio.run(loader.load(7,[1]))

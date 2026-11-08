@@ -5,6 +5,7 @@ from module_agent.literature.domain.run import LiteratureRunStatus
 from module_agent.literature.domain.repositories.selection import PaperSelectionRepository
 from module_agent.literature.domain.selection import PaperSelection
 from module_agent.shared.exceptions import PaperSelectionAlreadyExistsError, InvalidPaperSelectionError
+from module_agent.shared.exceptions import UnsafePaperSelectionError
 
 
 class PaperSelectionService:
@@ -43,6 +44,9 @@ class PaperSelectionService:
         ]
         if invalid_paper_ids:
             raise InvalidPaperSelectionError(run_id, invalid_paper_ids)
+        blocked = [paper.paper_id for paper in papers if paper.paper_id in request_papers_ids and paper.integrity is not None and paper.integrity.blocked]
+        if blocked:
+            raise UnsafePaperSelectionError(run_id, blocked)
         
         selection = PaperSelection(
             run_id=run_id,

@@ -28,9 +28,13 @@ from module_agent.workflow.adapters.database.model import (
 from module_agent.workflow.adapters.database.node_execution_model import (
     WorkflowNodeExecutionModel,
 )
+from module_agent.experiments.database import (
+    ExperimentJobModel, ExperimentWorkerModel, ExperimentArtifactModel,
+)
 
 
 __all__ = [
+    "ExperimentJobModel", "ExperimentWorkerModel", "ExperimentArtifactModel",
     "LiteratureRunModel",
     "LiteratureRunPaperModel",
     "PaperModel",
