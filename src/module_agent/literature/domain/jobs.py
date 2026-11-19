@@ -12,6 +12,8 @@ class LiteratureJobQueue(Protocol):
         run_id: int,
         resume_workflow: bool = False,
         trace_id: UUID | None = None,
+        *,
+        message_id: str | None = None,
     ) -> str:
         """把任务消息写入主队列。"""
         ...

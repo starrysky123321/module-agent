@@ -18,6 +18,9 @@ from module_agent.literature.adapters.messaging.completion_publisher import (
 )
 from module_agent.bootstrap.worker_factories import build_literature_run_executor
 from module_agent.literature.workers.search import LiteratureWorker
+from module_agent.literature.workers.outbox import LiteratureOutboxRelay
+from module_agent.literature.adapters.database.repositories.job_outbox import SqlAlchemyLiteratureJobOutbox
+from module_agent.literature.adapters.messaging.job_queue import RabbitMQLiteratureJobQueue
 from module_agent.shared.llm.qwen_client import qwen_client_manager
 from module_agent.literature.adapters.sources.http_client import (
     literature_http_client_manager,
@@ -41,8 +44,16 @@ async def run_worker() -> None:
         executor_factory=build_literature_run_executor,
     )
 
+    relay = LiteratureOutboxRelay(
+        SqlAlchemyLiteratureJobOutbox(async_session_factory),
+        RabbitMQLiteratureJobQueue(rabbitmq_connection_manager),
+    )
+
     try:
-        await worker.run()
+        async with asyncio.TaskGroup() as tasks:
+            relay_task = tasks.create_task(relay.run())
+            await worker.run()
+            relay_task.cancel()
     finally:
         await rabbitmq_connection_manager.close()
         await redis_client.aclose()

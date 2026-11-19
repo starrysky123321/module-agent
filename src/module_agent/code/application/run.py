@@ -13,6 +13,7 @@ from module_agent.code.domain import (
 from module_agent.code.domain.ports import PaperCodeStatusWriter
 from module_agent.shared.exceptions import CodeRunNotFoundError
 from module_agent.shared.context import observability_context
+from module_agent.shared.idempotency import IdempotencyOperation, idempotency_key
 from module_agent.shared.logging import logger
 from module_agent.shared.redaction import redact_sensitive_text
 from module_agent.shared.execution_control import ExecutionStopped, run_with_control
@@ -58,12 +59,16 @@ class CodeRunService:
         trace_id: UUID,
     ) -> CodeRun:
         """执行当前用例。"""
+        key = idempotency_key(
+            IdempotencyOperation.CODE_EXECUTE, request.literature_run_id, attempt
+        )
         existing = await self.repository.get_by_execution(
             request.literature_run_id,
             attempt,
         )
         if existing is not None:
             if existing.status in {CodeRunStatus.COMPLETED, CodeRunStatus.CANCELLED}:
+                logger.info("reusing code run | idempotency_key={} status={}", key, existing.status)
                 return existing
             raise RuntimeError(
                 f"CodeRun for attempt {attempt} is already {existing.status.value}"
@@ -86,7 +91,7 @@ class CodeRunService:
             workflow_id=request.literature_run_id,
             agent_run_id=run.id,
         ):
-            logger.info("code agent execution started | attempt={}", attempt)
+            logger.info("code agent execution started | idempotency_key={}", key)
             try:
                 artifacts = await self._execute_agent(request)
             except ExecutionStopped as exc:

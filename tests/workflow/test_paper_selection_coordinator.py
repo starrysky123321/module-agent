@@ -5,7 +5,6 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 
 from module_agent.shared.exceptions import (
@@ -23,6 +22,7 @@ from module_agent.workflow.domain import (
 from module_agent.literature.application.run import LiteratureRunService
 from module_agent.literature.application.dispatch import LiteratureRunDispatcher
 from module_agent.workflow.service import ModuleWorkflowService
+from module_agent.workflow.state import workflow_config
 from module_agent.literature.application.selection import PaperSelectionService
 from module_agent.workflow.coordinator import (
     ModuleWorkflowCoordinator,
@@ -289,11 +289,7 @@ def test_coordinator_runs_complete_pause_and_resume_cycle() -> None:
     async def run_cycle() -> tuple[PaperSelectionInterrupt, PaperSelection, Any]:
         prompt = await coordinator.start_paper_selection(7)
         selection = await coordinator.confirm_paper_selection(7, request)
-        snapshot = await graph.aget_state(
-            RunnableConfig(
-                configurable={"thread_id": "literature-run:7"}
-            )
-        )
+        snapshot = await graph.aget_state(workflow_config(7))
         return prompt, selection, snapshot
 
     prompt, selection, snapshot = asyncio.run(run_cycle())

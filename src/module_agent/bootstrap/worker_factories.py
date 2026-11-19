@@ -47,10 +47,9 @@ from module_agent.literature.adapters.database.repositories.transactional import
 from module_agent.shared.messaging.rabbitmq import (
     rabbitmq_connection_manager,
 )
-from module_agent.literature.adapters.messaging.job_queue import (
-    RabbitMQLiteratureJobQueue,
+from module_agent.literature.adapters.database.repositories.job_outbox import (
+    SqlAlchemyLiteratureJobOutbox,
 )
-from module_agent.literature.application.dispatch import LiteratureRunDispatcher
 from module_agent.workflow.service import ModuleWorkflowService
 from module_agent.workflow.coordinator import (
     ModuleWorkflowCoordinator,
@@ -199,12 +198,7 @@ def build_module_workflow_coordinator(
         literature_run_repository=run_service.repository,
         paper_selection_repository=TransactionalPaperSelectionRepository(async_session_factory),
     )
-    dispatcher = LiteratureRunDispatcher(
-        run_service=run_service,
-        job_queue=RabbitMQLiteratureJobQueue(
-            rabbitmq_connection_manager
-        ),
-    )
+    dispatcher = SqlAlchemyLiteratureJobOutbox(async_session_factory)
     code_agent = _build_configured_code_agent()
     validation_agent = build_validation_agent(
         workspace_root=app_settings.code_workspace_root,

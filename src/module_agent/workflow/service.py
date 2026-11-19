@@ -4,7 +4,7 @@ from module_agent.workflow.domain import CodeCompletionSignal
 from module_agent.code.domain.jobs import ComputeTarget
 from module_agent.workflow.domain import PaperSelectionInterrupt, PaperSelectionRequest
 from langchain_core.runnables import RunnableConfig
-from langgraph.types import Command
+from langgraph.types import Command, StateSnapshot
 from module_agent.workflow.domain import ModuleGraphState
 from module_agent.workflow.domain import LiteratureWaitInterrupt
 from typing import Any, cast
@@ -57,6 +57,18 @@ class ModuleWorkflowService:
         """初始化当前对象。"""
         self.graph = graph
         self.lifecycle_service = lifecycle_service
+
+    async def _read_state(self, run_id: int) -> tuple[RunnableConfig, StateSnapshot]:
+        config = workflow_config(run_id)
+        snapshot = await self.graph.aget_state(config)
+        if snapshot.created_at is not None:
+            return config, snapshot
+
+        legacy_config = workflow_config(run_id, legacy=True)
+        legacy_snapshot = await self.graph.aget_state(legacy_config)
+        if legacy_snapshot.created_at is not None:
+            return legacy_config, legacy_snapshot
+        return config, snapshot
         
     async def start_paper_selection(
         self,
@@ -74,9 +86,7 @@ class ModuleWorkflowService:
         validate_run_id(run_id)
         
         
-        config = workflow_config(run_id)
-        
-        snapshot = await self.graph.aget_state(config)
+        config, snapshot = await self._read_state(run_id)
         
         if snapshot.interrupts:
             return PaperSelectionInterrupt.model_validate(
@@ -130,9 +140,7 @@ class ModuleWorkflowService:
             run_id,
             "resume paper selection",
         )
-        config = workflow_config(run_id)
-        
-        snapshot = await self.graph.aget_state(config)
+        config, snapshot = await self._read_state(run_id)
 
         if not snapshot.interrupts:
             raise WorkflowNotWaitingForSelectionError(run_id)
@@ -164,8 +172,7 @@ class ModuleWorkflowService:
         if type(code_run_id) is not int or code_run_id <= 0:
             raise ValueError("code_run_id must be a positive integer")
         trace_id = await self._ensure_active(run_id, "resume code workflow")
-        config = workflow_config(run_id)
-        snapshot = await self.graph.aget_state(config)
+        config, snapshot = await self._read_state(run_id)
         if (
             not snapshot.interrupts
             or snapshot.values.get("status")
@@ -202,9 +209,7 @@ class ModuleWorkflowService:
         """启动当前流程。"""
         validate_run_id(run_id)
 
-        config = workflow_config(run_id)
-
-        snapshot = await self.graph.aget_state(config)
+        config, snapshot = await self._read_state(run_id)
 
         if snapshot.interrupts:
             if (
@@ -269,9 +274,7 @@ class ModuleWorkflowService:
             run_id,
             "resume literature workflow",
         )
-        config = workflow_config(run_id)
-        
-        snapshot = await self.graph.aget_state(config)
+        config, snapshot = await self._read_state(run_id)
 
         if (
             snapshot.interrupts
@@ -322,9 +325,7 @@ class ModuleWorkflowService:
         """获取对应记录。"""
         validate_run_id(run_id)
 
-        config = workflow_config(run_id)
-
-        snapshot = await self.graph.aget_state(config)
+        _, snapshot = await self._read_state(run_id)
 
         raw_artifacts = snapshot.values.get("code_artifacts", [])
 
@@ -340,8 +341,7 @@ class ModuleWorkflowService:
         """获取对应记录。"""
         validate_run_id(run_id)
 
-        config = workflow_config(run_id)
-        snapshot = await self.graph.aget_state(config)
+        _, snapshot = await self._read_state(run_id)
         raw_reports = snapshot.values.get("validation_reports", [])
         return [
             ValidationReport.model_validate(report)
@@ -353,7 +353,7 @@ class ModuleWorkflowService:
         validate_run_id(run_id)
         if self.lifecycle_service is not None:
             await self.lifecycle_service.get(run_id)
-        snapshot = await self.graph.aget_state(workflow_config(run_id))
+        _, snapshot = await self._read_state(run_id)
         raw = snapshot.values.get("validation_policy")
         return ValidationPolicy.model_validate(raw) if raw is not None else None
 
@@ -365,9 +365,7 @@ class ModuleWorkflowService:
         """获取对应记录。"""
         validate_run_id(run_id)
 
-        config = workflow_config(run_id)
-
-        snapshot = await self.graph.aget_state(config)
+        _, snapshot = await self._read_state(run_id)
         values = dict(snapshot.values)
         raw_status = values.get("status")
 
@@ -416,12 +414,11 @@ class ModuleWorkflowService:
         if self.lifecycle_service is None:
             raise RuntimeError("Workflow lifecycle service is not configured")
         run = await self.lifecycle_service.cancel(run_id)
-        config = workflow_config(run_id)
         with observability_context(
             trace_id=run.trace_id,
             workflow_id=run_id,
         ):
-            snapshot = await self.graph.aget_state(config)
+            config, snapshot = await self._read_state(run_id)
             if snapshot.values:
                 await self.graph.aupdate_state(
                     config,
@@ -456,8 +453,7 @@ class ModuleWorkflowService:
                 run_id,
                 "only a timed-out workflow can be resumed",
             )
-        config = workflow_config(run_id)
-        snapshot = await self.graph.aget_state(config)
+        _, snapshot = await self._read_state(run_id)
         raw_status = snapshot.values.get("status")
         target = resumable_wait_status(raw_status)
         if target is None or not snapshot.interrupts:

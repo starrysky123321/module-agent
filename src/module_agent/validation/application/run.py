@@ -10,6 +10,7 @@ from module_agent.validation.domain import (
 )
 from module_agent.shared.exceptions import ValidationRunNotFoundError
 from module_agent.shared.context import observability_context
+from module_agent.shared.idempotency import IdempotencyOperation, idempotency_key
 from module_agent.shared.logging import logger
 
 
@@ -32,12 +33,16 @@ class ValidationRunService:
         trace_id: UUID,
     ) -> ValidationRun:
         """执行当前用例。"""
+        key = idempotency_key(
+            IdempotencyOperation.VALIDATION_EXECUTE, request.literature_run_id, attempt
+        )
         existing = await self.repository.get_by_execution(
             request.literature_run_id,
             attempt,
         )
         if existing is not None:
             if existing.status is ValidationRunStatus.COMPLETED:
+                logger.info("reusing validation run | idempotency_key={}", key)
                 return existing
             raise RuntimeError(
                 f"ValidationRun for attempt {attempt} is "
@@ -61,10 +66,7 @@ class ValidationRunService:
             workflow_id=request.literature_run_id,
             agent_run_id=run.id,
         ):
-            logger.info(
-                "validation agent execution started | attempt={}",
-                attempt,
-            )
+            logger.info("validation agent execution started | idempotency_key={}", key)
             try:
                 reports = await self.agent.run(request)
             except Exception as exc:

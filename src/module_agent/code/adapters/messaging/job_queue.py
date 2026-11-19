@@ -9,6 +9,11 @@ from module_agent.code.adapters.messaging.topology import (
 )
 from module_agent.code.domain.jobs import CodeJob, ComputeTarget
 from module_agent.code.domain.request import CodeAgentRequest
+from module_agent.shared.idempotency import (
+    IDEMPOTENCY_KEY_HEADER,
+    IdempotencyOperation,
+    idempotency_key,
+)
 from module_agent.shared.messaging.rabbitmq import RabbitMQConnectionManager
 
 
@@ -45,6 +50,13 @@ class RabbitMQCodeJobQueue:
                     content_type="application/json",
                     delivery_mode=DeliveryMode.PERSISTENT,
                     message_id=message_id,
+                    headers={
+                        IDEMPOTENCY_KEY_HEADER: idempotency_key(
+                            IdempotencyOperation.CODE_EXECUTE,
+                            request.literature_run_id,
+                            attempt,
+                        ),
+                    },
                 ),
                 routing_key=queue.name,
                 mandatory=True,

@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -22,6 +23,7 @@ from module_agent.workflow.domain import (
     WorkflowStatus,
 )
 from module_agent.code.application.agent import CodeAgent
+from module_agent.code.domain.jobs import ComputeTarget
 from module_agent.code.domain.artifact import (
     CodeArtifact,
     CodeArtifactOrigin,
@@ -32,6 +34,7 @@ from module_agent.code.domain.request import CodePaperInput
 from module_agent.literature.application.dispatch import LiteratureRunDispatcher
 from module_agent.workflow.code_input import SelectedPaperCodeInputLoader
 from module_agent.workflow.service import ModuleWorkflowService
+from module_agent.workflow.state import build_initial_state, workflow_config
 from module_agent.workflow.graph import ModuleBuildWorkflow
 from module_agent.bootstrap.factories.validation_agent import (
     build_validation_agent,
@@ -151,6 +154,43 @@ def test_resource_budget_survives_service_recreation_and_final_result() -> None:
         await restored.resume_paper_selection(7, PaperSelectionRequest(selected_paper_ids=[51]))
         result = await restored.get_result(7)
         assert result.validation_policy == policy
+
+    asyncio.run(run())
+
+
+def test_service_resumes_an_existing_legacy_checkpoint() -> None:
+    service = _service()
+    old_config = workflow_config(7, legacy=True)
+    new_config = workflow_config(7)
+
+    async def run() -> None:
+        await service.graph.ainvoke(
+            build_initial_state(
+                run_id=7,
+                trace_id=uuid4(),
+                code_requirements="Use PyTorch",
+                validation_policy=None,
+                sandbox_options=None,
+                validation_requirements=None,
+                compute_target=ComputeTarget.CPU,
+                status=WorkflowStatus.WAITING_FOR_PAPER_SELECTION,
+                next_step=SupervisorStep.PAPER_SELECTION,
+            ),
+            old_config,
+        )
+
+        restored = ModuleWorkflowService(service.graph)
+        prompt = await restored.start_paper_selection(7)
+        await restored.resume_paper_selection(
+            7, PaperSelectionRequest(selected_paper_ids=[51])
+        )
+        result = await restored.get_result(7)
+
+        assert prompt.literature_run_id == 7
+        assert result.status is WorkflowStatus.COMPLETED
+        assert result.selected_paper_ids == [51]
+        assert (await service.graph.aget_state(new_config)).created_at is None
+        assert (await service.graph.aget_state(old_config)).values["status"] == "completed"
 
     asyncio.run(run())
 
@@ -349,7 +389,7 @@ def test_service_rejects_invalid_run_id(run_id: int) -> None:
 def test_service_rejects_graph_that_does_not_interrupt() -> None:
     graph = MagicMock()
     graph.aget_state = AsyncMock(
-        return_value=SimpleNamespace(interrupts=(), values={})
+        return_value=SimpleNamespace(interrupts=(), values={}, created_at=None)
     )
     graph.ainvoke = AsyncMock(return_value={})
     service = ModuleWorkflowService(graph)
@@ -392,6 +432,7 @@ def test_service_validates_repository_artifact_from_checkpoint() -> None:
     graph = MagicMock()
     graph.aget_state = AsyncMock(
         return_value=SimpleNamespace(
+            created_at="saved",
             values={
                 "code_artifacts": [expected.model_dump(mode="json")]
             }
@@ -403,13 +444,13 @@ def test_service_validates_repository_artifact_from_checkpoint() -> None:
 
     assert artifacts == [expected]
     config = graph.aget_state.await_args.args[0]
-    assert config["configurable"]["thread_id"] == "literature-run:7"
+    assert config["configurable"]["thread_id"] == "workflow.thread:7"
 
 
 def test_service_returns_empty_artifacts_before_code_step() -> None:
     graph = MagicMock()
     graph.aget_state = AsyncMock(
-        return_value=SimpleNamespace(values={})
+        return_value=SimpleNamespace(values={}, created_at=None)
     )
     service = ModuleWorkflowService(graph)
 
@@ -436,7 +477,7 @@ def test_service_reads_validation_reports_after_workflow_completion() -> None:
 def test_service_returns_empty_reports_before_validation_step() -> None:
     graph = MagicMock()
     graph.aget_state = AsyncMock(
-        return_value=SimpleNamespace(values={})
+        return_value=SimpleNamespace(values={}, created_at=None)
     )
     service = ModuleWorkflowService(graph)
 
@@ -493,6 +534,7 @@ def test_service_builds_final_failed_result_from_checkpoint() -> None:
     graph = MagicMock()
     graph.aget_state = AsyncMock(
         return_value=SimpleNamespace(
+            created_at="saved",
             values={
                 "literature_run_id": 7,
                 "status": WorkflowStatus.FAILED.value,
@@ -508,13 +550,14 @@ def test_service_builds_final_failed_result_from_checkpoint() -> None:
     assert result.failure == failure
     assert result.attempts[SupervisorStep.VALIDATION] == 2
     config = graph.aget_state.await_args.args[0]
-    assert config["configurable"]["thread_id"] == "literature-run:7"
+    assert config["configurable"]["thread_id"] == "workflow.thread:7"
 
 
 def test_service_rejects_result_query_while_workflow_is_running() -> None:
     graph = MagicMock()
     graph.aget_state = AsyncMock(
         return_value=SimpleNamespace(
+            created_at="saved",
             values={
                 "literature_run_id": 7,
                 "status": WorkflowStatus.VALIDATING.value,
@@ -551,7 +594,7 @@ def test_service_deduplicates_result_warnings_in_original_order() -> None:
         values = {**state, "validation_reports": reports}
         graph = MagicMock()
         graph.aget_state = AsyncMock(
-            return_value=SimpleNamespace(values=values)
+            return_value=SimpleNamespace(values=values, created_at="saved")
         )
         return await ModuleWorkflowService(graph).get_result(7)
 

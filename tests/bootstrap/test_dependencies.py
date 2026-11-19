@@ -54,8 +54,8 @@ from module_agent.literature.application.query_planning import (
 from module_agent.literature.application.relevance import (
     RuleBasedPaperRelevanceScorer,
 )
-from module_agent.literature.adapters.messaging.job_queue import (
-    RabbitMQLiteratureJobQueue,
+from module_agent.literature.adapters.database.repositories.job_outbox import (
+    SqlAlchemyLiteratureJobOutbox,
 )
 from module_agent.workflow.service import ModuleWorkflowService
 from module_agent.workflow.coordinator import (
@@ -133,11 +133,7 @@ def test_fastapi_builds_literature_agent_dependency_chain() -> None:
             "run_uses_request_session": run_service.repository.session is session,
             "executor_uses_agent": executor.agent is agent,
             "executor_uses_run_service": executor.run_service is run_service,
-            "dispatcher_uses_run_service": dispatcher.run_service is run_service,
-            "dispatcher_uses_rabbitmq": isinstance(
-                dispatcher.job_queue,
-                RabbitMQLiteratureJobQueue,
-            ),
+            "dispatcher_uses_outbox": isinstance(dispatcher, SqlAlchemyLiteratureJobOutbox),
         }
 
     async def request_dependency_check() -> httpx.Response:
@@ -163,8 +159,7 @@ def test_fastapi_builds_literature_agent_dependency_chain() -> None:
         "run_uses_request_session": True,
         "executor_uses_agent": True,
         "executor_uses_run_service": True,
-        "dispatcher_uses_run_service": True,
-        "dispatcher_uses_rabbitmq": True,
+        "dispatcher_uses_outbox": True,
     }
 
 

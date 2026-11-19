@@ -1,3 +1,6 @@
+from module_agent.literature.adapters.database.models.messaging import (
+    LiteratureJobInboxModel, LiteratureJobOutboxModel,
+)
 from module_agent.literature.adapters.database.models.run import (
     LiteratureRunModel,
     LiteratureRunPaperModel,
@@ -35,6 +38,8 @@ from module_agent.experiments.database import (
 
 __all__ = [
     "ExperimentJobModel", "ExperimentWorkerModel", "ExperimentArtifactModel",
+    "LiteratureJobInboxModel",
+    "LiteratureJobOutboxModel",
     "LiteratureRunModel",
     "LiteratureRunPaperModel",
     "PaperModel",

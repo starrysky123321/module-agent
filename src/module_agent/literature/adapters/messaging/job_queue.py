@@ -2,6 +2,11 @@ import json
 from uuid import UUID, uuid4
 from aio_pika import DeliveryMode, Message
 
+from module_agent.shared.idempotency import (
+    IDEMPOTENCY_KEY_HEADER,
+    IdempotencyOperation,
+    idempotency_key,
+)
 from module_agent.shared.messaging.rabbitmq import (
     RabbitMQConnectionManager,
 )
@@ -31,19 +36,21 @@ class RabbitMQLiteratureJobQueue:
         run_id: int,
         resume_workflow: bool = False,
         trace_id: UUID | None = None,
+        *,
+        message_id: str | None = None,
     ) -> str:
         """把任务消息写入主队列。"""
         if run_id <= 0:
             raise ValueError("Run id must be positive")
 
         # 1. 生成我们自己的消息 ID
-        message_id = uuid4().hex
+        message_id = message_id or uuid4().hex
 
         # 2. 从步骤一的管理器获取 RabbitMQ 连接
         connection = await self.connection_manager.get_connection()
 
         # 3. 创建 Channel
-        async with connection.channel(publisher_confirms=True) as channel:
+        async with connection.channel(publisher_confirms=True, on_return_raises=True) as channel:
             # 4. 声明任务队列
             queue = await declare_literature_topology(
                 channel,
@@ -62,6 +69,11 @@ class RabbitMQLiteratureJobQueue:
                 content_type="application/json",
                 delivery_mode=DeliveryMode.PERSISTENT,
                 message_id=message_id,
+                headers={
+                    IDEMPOTENCY_KEY_HEADER: idempotency_key(
+                        IdempotencyOperation.LITERATURE_CONSUME, run_id, message_id
+                    ),
+                },
             )
 
             # 6. 发送到队列

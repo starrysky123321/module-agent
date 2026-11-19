@@ -84,6 +84,7 @@ def test_job_publisher_emits_persistent_validated_job() -> None:
     assert payload["attempt"] == 2
     assert payload["compute_target"] == "gpu"
     assert message.message_id == message_id
+    assert message.headers["idempotency-key"] == "code.execute:7:2"
     assert publish.await_args.kwargs == {
         "routing_key": "target",
         "mandatory": True,

@@ -1,7 +1,7 @@
 """A failed/active deletion must never silently remove task history."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,7 +32,7 @@ def test_database_rejection_preserves_checkpoint():
 
 def test_checkpoint_cleanup_failure_can_be_retried_after_record_deletion():
     repository = AsyncMock()
-    checkpoint = AsyncMock(side_effect=[RuntimeError("storage unavailable"), None])
+    checkpoint = AsyncMock(side_effect=[None, RuntimeError("storage unavailable"), None, None])
     service = TaskDeletionService(repository, checkpoint)
     with pytest.raises(AppException) as error:
         asyncio.run(service.delete(9))
@@ -40,8 +40,12 @@ def test_checkpoint_cleanup_failure_can_be_retried_after_record_deletion():
     assert error.value.code == "task_checkpoint_cleanup_pending"
     assert "记录已删除" in error.value.message
     asyncio.run(service.delete(9))
-    assert checkpoint.await_count == 2
-    checkpoint.assert_awaited_with("literature-run:9")
+    assert checkpoint.await_args_list == [
+        call("workflow.thread:9"),
+        call("literature-run:9"),
+        call("workflow.thread:9"),
+        call("literature-run:9"),
+    ]
 
 
 def repository_case(literature="completed", workflow="completed", code=(), validation=(), experiment=None):

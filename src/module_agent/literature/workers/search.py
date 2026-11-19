@@ -1,6 +1,9 @@
 from collections.abc import Callable
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from module_agent.literature.adapters.database.models.messaging import LiteratureJobInboxModel
 from module_agent.literature.application.execution import LiteratureRunExecutor
 from module_agent.literature.domain.jobs import LiteratureJobConsumer
 from module_agent.literature.domain.jobs import LiteratureJob
@@ -8,9 +11,11 @@ from module_agent.literature.domain.events import (
     LiteratureCompletionPublisher,
 )
 from module_agent.literature.domain.run import LiteratureRunStatus
-from sqlalchemy.ext.asyncio import async_sessionmaker
 from module_agent.shared.context import observability_context
 from module_agent.shared.execution_control import ExecutionStopped
+from module_agent.shared.exceptions import LiteratureRunNotFoundError
+from module_agent.shared.idempotency import IdempotencyOperation, idempotency_key
+from module_agent.shared.logging import logger
 
 LiteratureRunExecutorFactory = Callable[
     [AsyncSession],
@@ -43,13 +48,21 @@ class LiteratureWorker:
             workflow_id=job.run_id,
             message_id=job.message_id,
         ):
+            if job.message_id is not None:
+                logger.info(
+                    "literature delivery received | idempotency_key={}",
+                    idempotency_key(IdempotencyOperation.LITERATURE_CONSUME, job.run_id, job.message_id),
+                )
             await self._execute(job)
 
     async def _execute(self, job: LiteratureJob) -> None:
         async with self.session_factory() as session:
             async with session.begin():
                 executor = self.executor_factory(session)
-                run = await executor.get_run(job.run_id)
+                try:
+                    run = await executor.get_run(job.run_id)
+                except LiteratureRunNotFoundError:
+                    return  # A delivery already in RabbitMQ can outlive a deleted task.
                 already_completed = (
                     run.status in {LiteratureRunStatus.COMPLETED, LiteratureRunStatus.CANCELLED}
                 )
@@ -63,11 +76,24 @@ class LiteratureWorker:
 
         async with self.session_factory() as session:
             async with session.begin():
-                executor = self.executor_factory(session)
-                try:
-                    await executor.execute_started(run)
-                except ExecutionStopped:
-                    pass  # 在事务内提交 cancelled，取消消息也可以安全确认。
+                if job.message_id is None or await self._claim_message(session, job):
+                    executor = self.executor_factory(session)
+                    try:
+                        await executor.execute_started(run)
+                    except ExecutionStopped:
+                        pass  # 在事务内提交 cancelled，取消消息也可以安全确认。
 
         if job.resume_workflow:
             await self.completion_publisher.publish(job.run_id)
+
+
+    @staticmethod
+    async def _claim_message(session: AsyncSession, job: LiteratureJob) -> bool:
+        """Commit the receipt with the search results; rollback allows redelivery."""
+        statement = (
+            insert(LiteratureJobInboxModel)
+            .values(run_id=job.run_id, message_id=job.message_id)
+            .on_conflict_do_nothing(index_elements=["run_id", "message_id"])
+            .returning(LiteratureJobInboxModel.message_id)
+        )
+        return await session.scalar(statement) is not None

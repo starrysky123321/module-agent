@@ -25,10 +25,15 @@ def validate_run_id(run_id: int) -> None:
         raise ValueError("run_id must be a positive integer")
 
 
-def workflow_config(run_id: int) -> RunnableConfig:
+def workflow_thread_id(run_id: int, *, legacy: bool = False) -> str:
+    prefix = "literature-run" if legacy else "workflow.thread"
+    return f"{prefix}:{run_id}"
+
+
+def workflow_config(run_id: int, *, legacy: bool = False) -> RunnableConfig:
     """Return the stable LangGraph thread configuration for one run."""
     return RunnableConfig(
-        configurable={"thread_id": f"literature-run:{run_id}"}
+        configurable={"thread_id": workflow_thread_id(run_id, legacy=legacy)}
     )
 
 

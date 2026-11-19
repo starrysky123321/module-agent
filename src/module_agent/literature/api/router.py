@@ -165,7 +165,7 @@ async def enqueue_run(
           Depends(get_literature_run_dispatcher),
       ],
   ) -> LiteratureDispatchResponse:
-      """把指定文献任务发送到 RabbitMQ。"""
+      """持久化文献任务的派发请求，交给后台发送。"""
       message_id = await dispatcher.dispatch(run_id)
 
       return LiteratureDispatchResponse(

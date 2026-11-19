@@ -5,7 +5,7 @@ from typing import Protocol
 
 from module_agent.shared.exceptions import AppException
 from module_agent.shared.logging import logger
-from module_agent.workflow.state import validate_run_id
+from module_agent.workflow.state import validate_run_id, workflow_thread_id
 
 
 class TaskDeletionRepository(Protocol):
@@ -31,7 +31,8 @@ class TaskDeletionService:
         # the checkpoint of a task whose database deletion rolled back. Repeated
         # DELETE also cleans up a thread if the relational record is already gone.
         try:
-            await self.delete_checkpoint(f"literature-run:{run_id}")
+            await self.delete_checkpoint(workflow_thread_id(run_id))
+            await self.delete_checkpoint(workflow_thread_id(run_id, legacy=True))
         except Exception as exc:
             logger.warning("task checkpoint cleanup failed | run_id={} error_type={}", run_id, type(exc).__name__)
             raise AppException(

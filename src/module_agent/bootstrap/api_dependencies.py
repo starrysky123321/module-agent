@@ -33,12 +33,11 @@ from module_agent.literature.application.run import LiteratureRunService
 from module_agent.literature.domain.repositories.run import LiteratureRunRepository
 from module_agent.literature.application.execution import LiteratureRunExecutor
 from module_agent.literature.application.dispatch import LiteratureRunDispatcher
-from module_agent.literature.domain.jobs import LiteratureJobQueue
 from module_agent.shared.messaging.rabbitmq import (
     rabbitmq_connection_manager,
 )
-from module_agent.literature.adapters.messaging.job_queue import (
-    RabbitMQLiteratureJobQueue,
+from module_agent.literature.adapters.database.repositories.job_outbox import (
+    SqlAlchemyLiteratureJobOutbox,
 )
 from module_agent.literature.adapters.sources.registry import LITERATURE_SOURCE_REGISTRY
 from module_agent.literature.application.result import LiteratureResultService
@@ -248,25 +247,8 @@ def get_literature_run_executor(
 
 
 
-def get_literature_job_queue() -> LiteratureJobQueue:
-    """获取对应记录。"""
-    return RabbitMQLiteratureJobQueue(
-        rabbitmq_connection_manager
-    )
-
-
-def get_literature_run_dispatcher(
-    run_service: Annotated[
-        LiteratureRunService,
-        Depends(get_literature_run_service),
-    ],
-    job_queue: Annotated[
-        LiteratureJobQueue,
-        Depends(get_literature_job_queue),
-    ],
-) -> LiteratureRunDispatcher:
-    """获取对应记录。"""
-    return LiteratureRunDispatcher(run_service, job_queue)
+def get_literature_run_dispatcher() -> LiteratureRunDispatcher:
+    return SqlAlchemyLiteratureJobOutbox(async_session_factory)
 
 
 def get_literature_result_service(
@@ -494,12 +476,8 @@ def get_workflow_literature_run_service() -> LiteratureRunService:
     return LiteratureRunService(TransactionalLiteratureRunRepository(async_session_factory))
 
 
-def get_workflow_literature_run_dispatcher(
-    run_service: Annotated[LiteratureRunService, Depends(get_workflow_literature_run_service)],
-    job_queue: Annotated[LiteratureJobQueue, Depends(get_literature_job_queue)],
-) -> LiteratureRunDispatcher:
-    """Persist queue state before sending the message, then release the connection."""
-    return LiteratureRunDispatcher(run_service, job_queue)
+def get_workflow_literature_run_dispatcher() -> LiteratureRunDispatcher:
+    return get_literature_run_dispatcher()
 
 
 def get_workflow_paper_selection_service() -> PaperSelectionService:

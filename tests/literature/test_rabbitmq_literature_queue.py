@@ -63,11 +63,10 @@ def test_literature_queue_publishes_run_id() -> None:
     manager.get_connection.return_value = connection
     queue = RabbitMQLiteratureJobQueue(manager)
 
-    message_id = asyncio.run(queue.enqueue(42))
+    message_id = asyncio.run(queue.enqueue(42, message_id="persisted-message-id"))
 
-    assert isinstance(message_id, str)
-    assert message_id
-    connection.channel.assert_called_once_with(publisher_confirms=True)
+    assert message_id == "persisted-message-id"
+    connection.channel.assert_called_once_with(publisher_confirms=True, on_return_raises=True)
     assert channel.declare_queue.await_args_list == [
         call(
             "literature.jobs.dead.v1",
@@ -94,6 +93,7 @@ def test_literature_queue_publishes_run_id() -> None:
         "resume_workflow": False,
     }
     assert message.message_id == message_id
+    assert message.headers["idempotency-key"] == "literature.consume:42:persisted-message-id"
     exchange.publish.assert_awaited_once_with(
         message,
         routing_key="literature.jobs.v2",

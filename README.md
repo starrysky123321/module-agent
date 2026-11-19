@@ -126,6 +126,16 @@ src/module_agent/
 - Docker、Prometheus、Grafana、Alertmanager
 - uv、pytest、Ruff、basedpyright、GitHub Actions
 
+### 幂等键
+
+主流程的幂等键采用 `阶段.动作:任务ID[:额外标识]`。例如任务 `42` 的文献派发是
+`literature.dispatch:42`，选文是 `paper.select:42`，第一次代码执行和验证分别为
+`code.execute:42:1` 和 `validation.execute:42:1`。文献消费用
+`literature.consume:42:<message_id>` 识别同一条消息。文献和代码任务消息在
+RabbitMQ 的 `idempotency-key` Header 中带上该值，数据库使用各阶段原有的唯一约束查重。
+新工作流的 Checkpoint 定位键是 `workflow.thread:42`，已有 `literature-run:42`
+断点可继续恢复。
+
 ## 快速启动
 
 需要安装 Docker、Docker Compose 和

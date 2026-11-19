@@ -6,6 +6,8 @@ from module_agent.literature.domain.repositories.selection import PaperSelection
 from module_agent.literature.domain.selection import PaperSelection
 from module_agent.shared.exceptions import PaperSelectionAlreadyExistsError, InvalidPaperSelectionError
 from module_agent.shared.exceptions import UnsafePaperSelectionError
+from module_agent.shared.idempotency import IdempotencyOperation, idempotency_key
+from module_agent.shared.logging import logger
 
 
 class PaperSelectionService:
@@ -22,6 +24,7 @@ class PaperSelectionService:
         request: PaperSelectionRequest,
     ) -> PaperSelection:
         """校验并保存用户选择的论文。"""
+        key = idempotency_key(IdempotencyOperation.PAPER_SELECT, run_id)
         literature_run = await self.literature_run_repository.get_by_id(run_id)
         request_papers_ids = request.selected_paper_ids
         
@@ -33,6 +36,7 @@ class PaperSelectionService:
 
         paper_selection = await self.paper_selection_repository.get_by_run_id(run_id)
         if paper_selection is not None:
+            logger.info("paper selection already exists | idempotency_key={}", key)
             raise PaperSelectionAlreadyExistsError(run_id)
         papers = await self.literature_run_repository.get_run_papers(run_id)
         task_papers_ids = [paper.paper_id for paper in papers]
@@ -54,6 +58,8 @@ class PaperSelectionService:
             code_requirements=request.code_requirements,
         )
         
-        return await self.paper_selection_repository.create(selection)
+        saved = await self.paper_selection_repository.create(selection)
+        logger.info("paper selection recorded | idempotency_key={}", key)
+        return saved
             
             

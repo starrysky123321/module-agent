@@ -22,6 +22,9 @@ def test_workflow_identity_helpers_reject_bool_and_build_thread_id() -> None:
 
     validate_run_id(7)
     assert workflow_config(7)["configurable"]["thread_id"] == (
+        "workflow.thread:7"
+    )
+    assert workflow_config(7, legacy=True)["configurable"]["thread_id"] == (
         "literature-run:7"
     )
 

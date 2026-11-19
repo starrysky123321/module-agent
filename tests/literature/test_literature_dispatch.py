@@ -1,84 +1,57 @@
 import asyncio
-from datetime import date
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
-from module_agent.literature.domain.search import SearchRequest
-from module_agent.literature.domain.run import LiteratureRun, LiteratureRunStatus
-from module_agent.literature.domain.jobs import LiteratureJobQueue
-from module_agent.literature.application.dispatch import LiteratureRunDispatcher
-from module_agent.literature.application.run import LiteratureRunService
+from module_agent.literature.adapters.database.repositories.job_outbox import (
+    SqlAlchemyLiteratureJobOutbox,
+)
+from module_agent.literature.domain.jobs import LiteratureJob, LiteratureJobQueue
+from module_agent.literature.workers.outbox import LiteratureOutboxRelay
 
 
-def queued_run(run_id: int | None) -> LiteratureRun:
-    return LiteratureRun(
-        id=run_id,
-        status=LiteratureRunStatus.QUEUED,
-        request=SearchRequest(
-            topic="graph neural networks",
-            description="Find representative papers",
-            start_date=date(2024, 1, 1),
-            end_date=date(2025, 12, 31),
-            keywords=["GNN"],
-            max_results=10,
-        ),
+def test_relay_preserves_job_identity_and_marks_it_after_publish() -> None:
+    outbox = AsyncMock(spec=SqlAlchemyLiteratureJobOutbox)
+    queue = AsyncMock(spec=LiteratureJobQueue)
+    trace_id = uuid4()
+    outbox.claim_next.return_value = LiteratureJob(
+        run_id=7,
+        resume_workflow=True,
+        trace_id=trace_id,
+        message_id="persisted-id",
     )
 
+    async def publish(*args, **kwargs):
+        outbox.mark_published.assert_not_awaited()
 
-def test_dispatcher_queues_run_and_publishes_job() -> None:
-    run_service = AsyncMock(spec=LiteratureRunService)
-    run_service.queue_run.return_value = queued_run(7)
-    job_queue = AsyncMock(spec=LiteratureJobQueue)
-    job_queue.enqueue.return_value = "message-123"
-    dispatcher = LiteratureRunDispatcher(run_service, job_queue)
-
-    message_id = asyncio.run(dispatcher.dispatch(7))
-
-    assert message_id == "message-123"
-    run_service.queue_run.assert_awaited_once_with(7)
-    job_queue.enqueue.assert_awaited_once_with(
-        7,
-        resume_workflow=False,
-    )
-
-
-def test_dispatcher_rejects_queued_run_without_id() -> None:
-    run_service = AsyncMock(spec=LiteratureRunService)
-    run_service.queue_run.return_value = queued_run(None)
-    job_queue = AsyncMock(spec=LiteratureJobQueue)
-    dispatcher = LiteratureRunDispatcher(run_service, job_queue)
-
-    with pytest.raises(RuntimeError, match="missing id"):
-        asyncio.run(dispatcher.dispatch(7))
-
-    job_queue.enqueue.assert_not_awaited()
-
-
-def test_dispatcher_marks_job_for_workflow_resume() -> None:
-    run_service = AsyncMock(spec=LiteratureRunService)
-    run_service.queue_run.return_value = queued_run(7)
-    job_queue = AsyncMock(spec=LiteratureJobQueue)
-    job_queue.enqueue.return_value = "message-123"
-    dispatcher = LiteratureRunDispatcher(run_service, job_queue)
-
-    asyncio.run(dispatcher.dispatch(7, resume_workflow=True))
-
-    job_queue.enqueue.assert_awaited_once_with(
+    queue.enqueue.side_effect = publish
+    assert asyncio.run(LiteratureOutboxRelay(outbox, queue).publish_next())
+    queue.enqueue.assert_awaited_once_with(
         7,
         resume_workflow=True,
+        trace_id=trace_id,
+        message_id="persisted-id",
     )
+    outbox.mark_published.assert_awaited_once_with("persisted-id")
 
 
-def test_dispatcher_propagates_publish_failure() -> None:
-    publish_error = RuntimeError("RabbitMQ unavailable")
-    run_service = AsyncMock(spec=LiteratureRunService)
-    run_service.queue_run.return_value = queued_run(7)
-    job_queue = AsyncMock(spec=LiteratureJobQueue)
-    job_queue.enqueue.side_effect = publish_error
-    dispatcher = LiteratureRunDispatcher(run_service, job_queue)
+def test_relay_keeps_failed_publish_pending() -> None:
+    outbox = AsyncMock(spec=SqlAlchemyLiteratureJobOutbox)
+    queue = AsyncMock(spec=LiteratureJobQueue)
+    outbox.claim_next.return_value = LiteratureJob(run_id=7, message_id="persisted-id")
+    queue.enqueue.side_effect = RuntimeError("RabbitMQ unavailable")
 
-    with pytest.raises(RuntimeError) as captured:
-        asyncio.run(dispatcher.dispatch(7))
+    with pytest.raises(RuntimeError, match="RabbitMQ unavailable"):
+        asyncio.run(LiteratureOutboxRelay(outbox, queue).publish_next())
 
-    assert captured.value is publish_error
+    outbox.mark_published.assert_not_awaited()
+
+
+def test_relay_does_not_publish_when_outbox_is_empty() -> None:
+    outbox = AsyncMock(spec=SqlAlchemyLiteratureJobOutbox)
+    outbox.claim_next.return_value = None
+    queue = AsyncMock(spec=LiteratureJobQueue)
+
+    assert not asyncio.run(LiteratureOutboxRelay(outbox, queue).publish_next())
+    queue.enqueue.assert_not_awaited()

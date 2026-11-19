@@ -14,6 +14,7 @@ from module_agent.shared.checkpoint.postgres import PostgresCheckpointerManager
 from module_agent.shared.config import app_settings
 from module_agent.workflow.domain import PaperSelectionRequest
 from module_agent.workflow.service import ModuleWorkflowService
+from module_agent.workflow.state import workflow_thread_id
 from module_agent.literature.application.dispatch import LiteratureRunDispatcher
 from module_agent.workflow.graph import ModuleBuildWorkflow
 from module_agent.code.application.agent import CodeAgent
@@ -77,7 +78,7 @@ def test_workflow_resumes_after_postgres_connection_is_reopened() -> None:
     assert database_url, "LANGGRAPH_DATABASE_URL must be configured"
 
     run_id = uuid4().int % 2_000_000_000 + 1
-    thread_id = f"literature-run:{run_id}"
+    thread_id = workflow_thread_id(run_id)
 
     async def verify() -> None:
         try:
@@ -123,7 +124,7 @@ def test_compiled_workflow_survives_a_stale_checkpoint_connection_without_rebuil
     database_url = app_settings.langgraph_database_url
     assert database_url, "LANGGRAPH_DATABASE_URL must be configured"
     run_id = uuid4().int % 2_000_000_000 + 1
-    thread_id = f"literature-run:{run_id}"
+    thread_id = workflow_thread_id(run_id)
 
     async def verify():
         manager = PostgresCheckpointerManager(database_url)
