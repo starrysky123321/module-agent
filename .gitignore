@@ -12,6 +12,7 @@ htmlcov/
 *.py[cod]
 *.log
 .DS_Store
+.vscode/
 
 # Local runtime artifacts
 workspaces/

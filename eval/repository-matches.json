@@ -1,0 +1,95 @@
+[
+  {
+    "id": "dropedge",
+    "source": "https://arxiv.org/abs/1907.10903",
+    "paper": {
+      "paper_id": 1,
+      "source": "arxiv",
+      "source_id": "1907.10903",
+      "title": "DropEdge: Towards Deep Graph Convolutional Networks on Node Classification",
+      "authors": ["Yu Rong", "Wenbing Huang", "Tingyang Xu", "Junzhou Huang"],
+      "abstract": "The authors release the code at https://github.com/DropEdge/DropEdge."
+    },
+    "expected_repository": "DropEdge/DropEdge",
+    "candidates": [
+      {
+        "full_name": "DropEdge/DropEdge",
+        "description": "PyTorch implementation of DropEdge: Towards Deep Graph Convolutional Networks on Node Classification",
+        "label": "official"
+      }
+    ]
+  },
+  {
+    "id": "spiral-vs-benchmark",
+    "source": "https://link.springer.com/article/10.1007/s10994-026-07134-7",
+    "paper": {
+      "paper_id": 2,
+      "source": "springer",
+      "source_id": "10.1007/s10994-026-07134-7",
+      "title": "SPIRAL: A Novel Time Series to Image (TS2I) Transformation Method for Vision-Based Anomaly Detection",
+      "authors": ["Mateusz Smendowski", "Kamil Faber", "Piotr Nawrocki", "Nathalie Japkowicz", "Roberto Corizzo"],
+      "doi": "10.1007/s10994-026-07134-7",
+      "abstract": "Our implementation is available at https://github.com/Smendowski/SPIRAL."
+    },
+    "expected_repository": "Smendowski/SPIRAL",
+    "candidates": [
+      {
+        "full_name": "TheDatumOrg/TSB-AD",
+        "description": "Time series anomaly detection benchmark and evaluation framework",
+        "mention_url": "https://link.springer.com/article/10.1007/s10994-026-07134-7",
+        "label": "unrelated"
+      },
+      {
+        "full_name": "Smendowski/SPIRAL",
+        "description": "SPIRAL: A Novel Time Series to Image (TS2I) Transformation Method for Vision-Based Anomaly Detection",
+        "label": "official"
+      }
+    ]
+  },
+  {
+    "id": "publisher-navigation-link",
+    "source": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0134254",
+    "paper": {
+      "paper_id": 3,
+      "source": "plos",
+      "source_id": "10.1371/journal.pone.0134254",
+      "title": "Fast, Simple and Accurate Handwritten Digit Classification by Training Shallow Neural Network Classifiers with the Extreme Learning Machine Algorithm",
+      "authors": ["Mark D. McDonnell"],
+      "doi": "10.1371/journal.pone.0134254"
+    },
+    "expected_repository": null,
+    "candidates": [
+      {
+        "full_name": "PLOS/plos-thesaurus",
+        "description": "PLOS Subject Area Thesaurus",
+        "mention_url": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0134254",
+        "label": "unrelated"
+      }
+    ]
+  },
+  {
+    "id": "gat-vs-unofficial-port",
+    "source": "https://petar-v.com/GAT/",
+    "paper": {
+      "paper_id": 4,
+      "source": "arxiv",
+      "source_id": "1710.10903",
+      "title": "Graph Attention Networks",
+      "authors": ["Petar Veličković", "Guillem Cucurull", "Arantxa Casanova", "Adriana Romero", "Pietro Liò", "Yoshua Bengio"],
+      "supplementary_urls": ["https://github.com/PetarV-/GAT"]
+    },
+    "expected_repository": "PetarV-/GAT",
+    "candidates": [
+      {
+        "full_name": "diegoantognini/pyGAT",
+        "description": "Independent PyTorch port of Graph Attention Networks",
+        "label": "third_party"
+      },
+      {
+        "full_name": "PetarV-/GAT",
+        "description": "Graph Attention Networks, author implementation in TensorFlow",
+        "label": "official"
+      }
+    ]
+  }
+]

@@ -1,14 +1,19 @@
 # Module Agent
 
-Module Agent 是一个面向计算机科研场景的多 Agent 系统。
+Module Agent 把论文检索、人工选文、代码来源核验和静态检查串成一条可暂停、可恢复的
+科研工作流。工作台展示仓库来源证据、固定 commit 和验证结论。候选仓库证据不足时，
+系统生成待验证的复现计划。
 
-用户提交研究方向、时间范围和论文质量要求后，系统会自动检索并筛选论文，提取论文
-解决的问题和核心方法；用户确认感兴趣的论文后，系统继续寻找可信代码仓库。若论文
-没有公开实现，则生成明确标记的复现计划和候选工程，最后由独立的 Validation Agent
-检查产物质量。
+[![DropEdge 真实验收任务的完成页面](docs/evidence/workbench-dropedge.png)](docs/evidence/workbench-dropedge.webm)
 
-这个项目希望把原本分散的“找论文 → 找代码 → 判断是否可信 → 验证能否使用”过程，
-组织成一条可以暂停、恢复和追踪的工作流。
+[DropEdge 录屏](docs/evidence/workbench-dropedge.webm)展示已完成任务的仓库证据和检查明细。
+[人工选文截图](docs/evidence/workbench-selection.png)来自另一次 MNIST 验收，展示检索完成后的确认步骤。
+
+- **工作流恢复**通过缩短数据库事务并为 Checkpoint 引入可重连的连接池实现。分档并发与数据库恢复复测
+  累计完成 55 个工作流，其中 20 并发档从启动请求全部超时到 20/20 完成，端到端 P95 为 9.30 秒。
+  复测使用真实数据库和消息队列，论文与仓库数据由测试适配器提供。[故障与复测记录](docs/evidence/workflow-recovery.md)
+- **仓库来源核验**区分论文声明的实现地址、第三方移植和页面普通链接。
+  固定候选回归集的 4 个选择均符合标注。[案例、来源与复现命令](docs/evidence/repository-matching.md)
 
 ## 工作流程
 
